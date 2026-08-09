@@ -30,7 +30,13 @@ async def test_initialize_and_tools_list(client, tenant_factory):
         headers=headers,
     )
     names = {t["name"] for t in tools.json()["result"]["tools"]}
-    assert {"list_content", "create_content", "get_attribution_summary"} <= names
+    assert {
+        "list_content",
+        "create_content",
+        "get_attribution_summary",
+        "list_brands",
+        "transition_content",
+    } <= names
 
 
 async def test_tools_call_creates_and_lists_content(client, tenant_factory):
@@ -76,6 +82,111 @@ async def test_tools_call_validation_error_is_soft(client, tenant_factory):
             "id": 5,
             "method": "tools/call",
             "params": {"name": "create_content", "arguments": {}},  # missing title
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_tools_call_lists_brands(client, tenant_factory):
+    headers, _ = await _key_headers(client, tenant_factory)
+    listed = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {"name": "list_brands", "arguments": {}},
+        },
+        headers=headers,
+    )
+    assert listed.status_code == 200
+    result = listed.json()["result"]
+    assert result["isError"] is False
+    items = json.loads(result["content"][0]["text"])["items"]
+    assert items == []
+
+
+async def test_tools_call_transitions_content(client, tenant_factory):
+    headers, _ = await _key_headers(client, tenant_factory)
+    create = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {"name": "create_content", "arguments": {"title": "To review"}},
+        },
+        headers=headers,
+    )
+    content_id = json.loads(create.json()["result"]["content"][0]["text"])["id"]
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": {
+                "name": "transition_content",
+                "arguments": {"content_id": content_id, "status": "IN_REVIEW"},
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is False
+    updated = json.loads(result["content"][0]["text"])
+    assert updated["status"] == "IN_REVIEW"
+
+
+async def test_tools_call_rejects_illegal_transition(client, tenant_factory):
+    headers, _ = await _key_headers(client, tenant_factory)
+    create = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "tools/call",
+            "params": {"name": "create_content", "arguments": {"title": "Draft"}},
+        },
+        headers=headers,
+    )
+    content_id = json.loads(create.json()["result"]["content"][0]["text"])["id"]
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 14,
+            "method": "tools/call",
+            "params": {
+                "name": "transition_content",
+                "arguments": {"content_id": content_id, "status": "PUBLISHED"},
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_tools_call_transition_unknown_content_id(client, tenant_factory):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 15,
+            "method": "tools/call",
+            "params": {
+                "name": "transition_content",
+                "arguments": {
+                    "content_id": "00000000-0000-0000-0000-000000000000",
+                    "status": "IN_REVIEW",
+                },
+            },
         },
         headers=headers,
     )
