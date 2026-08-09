@@ -1,0 +1,101 @@
+# OpenGrow Core API — frontend reference
+
+The full, always-current contract is the OpenAPI spec:
+
+- Interactive docs: **`GET /docs`** (Swagger UI, non-prod)
+- Raw schema: **`GET /openapi.json`**
+
+This file covers the cross-cutting conventions a client needs; use `/docs` for
+exact request/response shapes per endpoint.
+
+## Base URL
+
+| Mode | Base URL | Notes |
+|---|---|---|
+| Lite (dev) | `http://localhost:8000` | browser → FastAPI directly |
+| Production | the node-gateway URL | browser → gateway → FastAPI (`NEXT_PUBLIC_API_BASE`) |
+
+Paths are identical in both modes (e.g. `/content`, `/analytics/summary`).
+
+## Auth
+
+- `POST /auth/login` — OAuth2 password form (`username`, `password`, form-encoded)
+  → `{ access_token, refresh_token, token_type: "bearer" }`.
+- Send `Authorization: Bearer <access_token>` on every other call.
+- `GET /auth/me` → `{ id, email, display_name, tenant_id, tenant_slug }`.
+- `401` on missing/invalid/expired token.
+- Self-service signup (`POST /auth/register`) is **hosted-only** — not in the
+  open-source core (returns 404 here).
+
+## Versioning
+
+`GET /version` → `{ service, version, mode, env }`. Feature-detect against
+`version` (semver).
+
+## Pagination (list endpoints)
+
+List endpoints return a **plain JSON array**. Opt into paging with query params;
+the unpaginated total comes back in a header:
+
+- `?limit=<1..200>` — max items (omit → all)
+- `?offset=<n>` — rows to skip
+- Response header **`X-Total-Count`** — total rows for the (filtered) query
+  (exposed via CORS)
+
+Covered: `GET /content`, `GET /brands`, `GET /analytics/events`.
+
+## Errors
+
+All errors are JSON with a **string** `detail`:
+
+```json
+{ "detail": "human-readable message" }
+```
+
+Validation errors (`422`) additionally include a structured `errors` array
+(the raw pydantic error list). Common codes: `400` bad input, `401`
+unauthenticated, `403` not permitted, `404` not found / not your tenant,
+`409` illegal state transition, `422` validation, `502` upstream (e.g. Stripe/
+GitHub).
+
+## Async jobs (poll pattern)
+
+`POST /assets/upload` and `POST /generations` return `202 Accepted` with an id;
+poll the corresponding `GET /assets/{id}` / `GET /generations/{id}` until the
+status reaches a terminal state (`INDEXED`/`COMPLETE`/`FAILED`).
+
+## Multi-tenancy
+
+Every resource is scoped to the caller's tenant. Cross-tenant reads/mutations
+return `404`. The tenant is derived from the token — clients never pass a tenant id.
+
+## Endpoint groups
+
+Core: `/auth`, `/assets`, `/generations`, `/content`, `/brands`, `/analytics`.
+Added for the platform build-out (see `/docs` for shapes):
+
+- **`/api-keys`** — create (returns the secret once)/list/revoke keys. Authenticate
+  any endpoint headlessly with `X-API-Key: <key>` instead of a Bearer token.
+- **`/usage`**, **`/usage/summary`** — per-tenant metering (units + cost by kind).
+- **Publishing** — `GET /content/publish/channels` (channels + `implemented`
+  flag), `POST /content/{id}/publish` `{channel, config}` for WordPress, Ghost,
+  Webflow, Email, X, and LinkedIn (BYOK creds in `config`); GitHub keeps its own
+  `POST /content/{id}/publish/github`. Config hosts are SSRF-guarded; a missing/
+  bad config → `502`.
+- **GitHub publishing credentials** — `GET /content/publish/github/config`
+  reports `{configured, api_url, source, has_tenant_credential, token_last4}`.
+  `source` is `"tenant"` when a tenant PAT is stored, `"env"` when the instance
+  `GITHUB_TOKEN` fallback is used, or `null` when publishing is not configured.
+  `POST /content/publish/github/credentials` with `{token, display_name?}` stores
+  or replaces the tenant PAT and returns only redacted metadata. The token is
+  validated against GitHub (`GET /user`) before storing — an invalid token →
+  `400` and nothing is persisted. `DELETE
+  /content/publish/github/credentials` removes the tenant PAT; publishing then
+  falls back to `GITHUB_TOKEN` if present. Tokens are never returned by the API.
+- **`/orchestrator/runs`** — `POST` starts a content run (returns `run_id`),
+  `GET /orchestrator/runs/{id}` polls status/result.
+- **`/mcp`** — MCP JSON-RPC endpoint for AI agents (initialize / tools/list /
+  tools/call); auth via `X-API-Key`.
+
+Rate limiting (per key/token/IP) is available but off by default; when a hosted
+deployment enables it, expect `429` + `Retry-After`.

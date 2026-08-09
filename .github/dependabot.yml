@@ -1,0 +1,80 @@
+# Dependabot config — kept intentionally quiet during pre-alpha.
+#
+# Cadence: monthly (not weekly) — we're not shipping to prod yet
+# Grouping: all patches into a single PR per ecosystem
+# Open PR limit: 1 per ecosystem — no more flooding
+#
+# When we hit v0.1.0 and have real users, bump these up and add security
+# scheduling.
+
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /services/fastapi-core
+    target-branch: dev
+    schedule:
+      interval: monthly
+      day: monday
+      time: '09:00'
+      timezone: Europe/Athens
+    open-pull-requests-limit: 1
+    labels: [dependencies, backend]
+    commit-message:
+      prefix: deps
+      include: scope
+    groups:
+      backend-all:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /services/node-gateway
+    target-branch: dev
+    schedule:
+      interval: monthly
+      day: monday
+      time: '09:00'
+      timezone: Europe/Athens
+    open-pull-requests-limit: 1
+    labels: [dependencies, gateway]
+    commit-message:
+      prefix: deps
+      include: scope
+    groups:
+      gateway-all:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: monthly
+      day: monday
+      time: '09:00'
+      timezone: Europe/Athens
+    open-pull-requests-limit: 1
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions-all:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /services/fastapi-core
+      - /services/node-gateway
+    target-branch: dev
+    schedule:
+      interval: monthly
+      day: monday
+      time: '09:00'
+      timezone: Europe/Athens
+    open-pull-requests-limit: 1
+    labels: [dependencies, docker]
+    commit-message:
+      prefix: docker
+      include: scope
+    groups:
+      docker-all:
+        patterns: ["*"]

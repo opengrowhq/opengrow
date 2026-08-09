@@ -1,0 +1,41 @@
+model_list:
+  # Chat models — BYOK. Keys resolved from env vars named LITELLM_<PROVIDER>_KEY,
+  # populated by the LiteLLM container from Infisical at boot.
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: claude-3-5-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: gemini-1.5-flash
+    litellm_params:
+      model: gemini/gemini-1.5-flash
+      api_key: os.environ/GOOGLE_API_KEY
+  # Local fallback — Ollama on the host (dev) or a colocated container (prod).
+  - model_name: llama3.1
+    litellm_params:
+      model: ollama/llama3.1
+      api_base: http://host.docker.internal:11434
+
+  # Embeddings
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  telemetry: false
+  cache: true
+  cache_params:
+    type: redis
+    host: redis
+    port: 6379
+    db: 4
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL

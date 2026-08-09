@@ -1,0 +1,26 @@
+# Prod — TLS auto-issued by Caddy via Let's Encrypt.
+{
+	email {$CADDY_EMAIL}
+	# ACME auto-provisioning; remove `staging=false` line if using LE staging.
+}
+
+{$CADDY_DOMAIN} {
+	encode gzip zstd
+
+	# API traffic to node-gateway (BFF)
+	@api path /auth/* /api/*
+	reverse_proxy @api node-gateway:3001
+
+	# Everything else (marketing site, docs) — placeholder while frontend not built
+	respond / "OpenGrow — coming soon" 200
+
+	log {
+		output stdout
+		format json
+	}
+}
+
+# Flower behind basic auth (edit via infisical + basicauth directive later)
+flower.{$CADDY_DOMAIN} {
+	reverse_proxy flower:5555
+}

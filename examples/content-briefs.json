@@ -1,0 +1,47 @@
+[
+  {
+    "topic": "Why your CI pipeline breaks on Fridays and how to stop it",
+    "primary_keyword": "flaky ci pipeline",
+    "secondary_keywords": ["ci/cd reliability", "deployment failures", "pipeline debugging"],
+    "audience": "Technical founders and early engineers at small SaaS teams",
+    "goal": "educate",
+    "tone": "direct, peer-to-peer, no buzzwords",
+    "length_words": 1200,
+    "sections_target": 5,
+    "notes": "Ground this in real failure patterns (flaky tests, env drift, secret rotation) rather than generic CI advice.",
+    "slug": "why-your-ci-pipeline-breaks-on-fridays",
+    "description": "Flaky CI pipelines usually fail for the same handful of reasons. Here's how to diagnose and fix the most common ones before they cost you a weekend.",
+    "tags": ["ci-cd", "engineering", "reliability"],
+    "brand_id": null
+  },
+  {
+    "topic": "One-click deploy tools: what 'zero config' actually costs you",
+    "primary_keyword": "one click deploy",
+    "secondary_keywords": ["deployment tools comparison", "zero config deploy", "vendor lock-in"],
+    "audience": "Founders evaluating deployment tooling for a small team",
+    "goal": "compare",
+    "tone": "direct, honest about tradeoffs",
+    "length_words": 1400,
+    "sections_target": 6,
+    "notes": "This is a comparison piece, not a takedown. Be fair to competitors' actual strengths.",
+    "slug": "one-click-deploy-tools-real-cost",
+    "description": "\"Zero config\" almost always means someone configured it for you upstream. Here's what that tradeoff actually costs a small team.",
+    "tags": ["deployment", "tooling", "comparison"],
+    "brand_id": null
+  },
+  {
+    "topic": "Onboarding a new engineer to deploy their first PR in under an hour",
+    "primary_keyword": "engineer onboarding checklist",
+    "secondary_keywords": ["developer onboarding", "first pr deploy", "engineering ramp-up"],
+    "audience": "Engineering leads at small, fast-growing teams",
+    "goal": "convert",
+    "tone": "practical, checklist-driven",
+    "length_words": 1000,
+    "sections_target": 4,
+    "notes": "End with a concrete checklist readers can copy. This is the piece most likely to drive a trial signup.",
+    "slug": "onboard-engineer-first-pr-under-an-hour",
+    "description": "A step-by-step checklist for getting a new engineer from repo access to a deployed PR in under an hour, without a half-day onboarding doc.",
+    "tags": ["onboarding", "developer-experience"],
+    "brand_id": null
+  }
+]

@@ -1,0 +1,588 @@
+"""Celery tasks. All long-running work (scan / embed / generate) runs here."""
+
+from __future__ import annotations
+import asyncio
+import json
+import logging
+import re
+import smtplib
+from datetime import datetime, timezone
+from email.message import EmailMessage
+from uuid import UUID
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.celery_app import celery
+from app.config import settings
+from app.core.analytics_import import event_dedupe_key, normalize_channel
+from app.core.brand_scraper import UnsafeURLError, fetch_site
+from app.core.clamav import scan_bytes
+from app.core.google_analytics import (
+    default_sync_window,
+    fetch_ga4_rows,
+    fetch_gsc_rows,
+)
+from app.core.google_oauth import refresh_google_access_token
+from app.core.litellm_client import chat_completion, embed
+from app.core.minio_client import get_object_bytes, promote_to_assets
+from app.core.qdrant import upsert_asset_embedding
+from app.core.article_grounding import ground_article
+from app.core.generation_messages import build_generation_messages
+from app.models.analytics import RevenueEvent, RevenueEventType
+from app.models.asset import Asset, AssetStatus
+from app.models.analytics_connector import (
+    AnalyticsConnector,
+    AnalyticsConnectorProvider,
+    AnalyticsConnectorStatus,
+)
+from app.models.brand import Brand, BrandStatus
+from app.models.generation import Generation, GenerationStatus
+
+log = logging.getLogger("worker")
+
+# Celery uses a sync engine (worker context, not asyncio-friendly at top level)
+_sync_engine = create_engine(
+    settings.postgres_sync_dsn, pool_pre_ping=True, pool_size=5
+)
+_SyncSession = sessionmaker(_sync_engine, expire_on_commit=False)
+
+
+def asset_snippet(text: str | None, limit: int = 2000) -> str:
+    return (text or "").strip()[:limit]
+
+
+def _run(coro):
+    """Bridge asyncio → celery sync task."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            raise RuntimeError("already running")
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
+
+# -----------------------------------------------------------------------------
+# ClamAV scan (cpu_light queue)
+# -----------------------------------------------------------------------------
+@celery.task(
+    bind=True,
+    name="app.workers.tasks.scan_asset",
+    max_retries=3,
+    default_retry_delay=10,
+)
+def scan_asset(self, asset_id: str) -> str:
+    with _SyncSession() as db:
+        asset = db.get(Asset, UUID(asset_id))
+        if not asset:
+            log.warning("scan_asset: asset %s missing", asset_id)
+            return "missing"
+
+        asset.status = AssetStatus.SCANNING
+        db.commit()
+
+        try:
+            blob = get_object_bytes(settings.MINIO_BUCKET_TEMP, asset.temp_object_key)
+        except Exception as e:
+            asset.status = AssetStatus.SCAN_FAILED
+            asset.scan_message = f"fetch failed: {e.__class__.__name__}"
+            db.commit()
+            return "fetch_failed"
+
+        clean, msg = scan_bytes(blob)
+        if not clean:
+            asset.status = AssetStatus.SCAN_FAILED
+            asset.scan_message = msg
+            db.commit()
+            return "infected"
+
+        target_key = asset.temp_object_key.replace("/", "/", 1)  # keep hierarchy
+        try:
+            promote_to_assets(asset.temp_object_key, target_key)
+        except Exception as e:
+            asset.status = AssetStatus.SCAN_FAILED
+            asset.scan_message = f"promote failed: {e.__class__.__name__}"
+            db.commit()
+            return "promote_failed"
+
+        asset.object_key = target_key
+        asset.status = AssetStatus.SCANNED
+        asset.scan_message = "clean"
+        db.commit()
+
+    embed_asset.delay(asset_id)
+    return "ok"
+
+
+# -----------------------------------------------------------------------------
+# LiteLLM embedding + Qdrant upsert (cpu_light queue)
+# -----------------------------------------------------------------------------
+@celery.task(
+    bind=True,
+    name="app.workers.tasks.embed_asset",
+    max_retries=3,
+    default_retry_delay=15,
+)
+def embed_asset(self, asset_id: str) -> str:
+    with _SyncSession() as db:
+        asset = db.get(Asset, UUID(asset_id))
+        if not asset or asset.status != AssetStatus.SCANNED:
+            return "skip"
+        asset.status = AssetStatus.EMBEDDING
+        db.commit()
+
+        try:
+            # Text assets: use raw bytes. Binary: use filename + content-type as proxy.
+            if asset.content_type.startswith("text/"):
+                blob = get_object_bytes(settings.MINIO_BUCKET_ASSETS, asset.object_key)
+                text = blob.decode("utf-8", errors="ignore")[:20_000]
+            else:
+                text = (
+                    f"{asset.filename} [{asset.content_type}] tenant={asset.tenant_id}"
+                )
+
+            vec = _run(embed(text))
+            asset.embedding = vec
+            asset.text_snippet = asset_snippet(text)
+            if not settings.is_lite:
+                _run(
+                    upsert_asset_embedding(
+                        asset_id=str(asset.id),
+                        tenant_id=str(asset.tenant_id),
+                        vector=vec,
+                        meta={
+                            "filename": asset.filename,
+                            "content_type": asset.content_type,
+                            "text_snippet": asset_snippet(text, 1000),
+                        },
+                    )
+                )
+            # Embedding + snippet are persisted on the Asset row in both modes; lite
+            # ranks them in Postgres, production also mirrors the vector into Qdrant.
+            asset.status = AssetStatus.INDEXED
+            db.commit()
+            return "ok"
+        except Exception as e:
+            asset.status = AssetStatus.EMBED_FAILED
+            asset.scan_message = f"embed failed: {e.__class__.__name__}"
+            db.commit()
+            raise self.retry(exc=e)
+
+
+# -----------------------------------------------------------------------------
+# LLM generation (gen_heavy queue)
+# -----------------------------------------------------------------------------
+@celery.task(
+    bind=True,
+    name="app.workers.tasks.run_generation",
+    max_retries=2,
+    default_retry_delay=30,
+)
+def run_generation(self, generation_id: str) -> str:
+    with _SyncSession() as db:
+        gen = db.get(Generation, UUID(generation_id))
+        if not gen:
+            return "missing"
+        gen.status = GenerationStatus.RUNNING
+        db.commit()
+
+        # Article generations get brand + retrieved-asset grounding via the
+        # shared helper (additive: failures inside never fail the run). The
+        # results feed the prompt builder directly — they are NOT written
+        # back into metadata_json (internal inputs don't belong in the row).
+        brand = None
+        context: list[dict] = []
+        meta = gen.metadata_json or {}
+        if meta.get("kind") in ("article_outline", "article_draft"):
+            brand, context = ground_article(
+                db, gen.tenant_id, meta.get("article") or {}
+            )
+
+        messages, max_tokens = build_generation_messages(
+            db, gen, brand=brand, context=context
+        )
+        model = (gen.metadata_json or {}).get("model") or settings.DEFAULT_LLM_MODEL
+        try:
+            content = _run(
+                chat_completion(messages=messages, model=model, max_tokens=max_tokens)
+            )
+            gen.result = content
+            gen.status = GenerationStatus.COMPLETE
+            db.commit()
+        except Exception as e:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = f"{e.__class__.__name__}: {e}"[:500]
+            db.commit()
+            raise self.retry(exc=e)
+
+    notify_email.delay(generation_id, "complete")
+    return "ok"
+
+
+@celery.task(
+    bind=True,
+    name="app.workers.tasks.run_orchestrator",
+    max_retries=1,
+    default_retry_delay=30,
+)
+def run_orchestrator(self, run_id: str) -> str:
+    """Drive an orchestrator run (generate → promote). Logic lives in
+    app.core.orchestrator.execute_run so it's unit-testable."""
+    from app.core.orchestrator import execute_run
+
+    with _SyncSession() as db:
+        try:
+            return execute_run(db, run_id)
+        except Exception as e:  # execute_run already marked the run FAILED
+            raise self.retry(exc=e)
+
+
+# -----------------------------------------------------------------------------
+# Notification email (Mailpit local, SMTP prod)
+# -----------------------------------------------------------------------------
+@celery.task(name="app.workers.tasks.notify_email")
+def notify_email(generation_id: str, event: str) -> str:
+    with _SyncSession() as db:
+        gen = db.get(Generation, UUID(generation_id))
+        if not gen:
+            return "missing"
+
+        msg = EmailMessage()
+        msg["From"] = "opengrow@opengrow.local"
+        msg["To"] = f"tenant-{gen.tenant_id}@opengrow.local"
+        msg["Subject"] = f"OpenGrow: generation {gen.id} {event}"
+        msg.set_content(
+            f"Generation {gen.id} finished with status={gen.status.value}\n\n"
+            f"Brief: {gen.brief[:200]}"
+        )
+        try:
+            with smtplib.SMTP(
+                settings.MAILPIT_HOST, settings.MAILPIT_SMTP_PORT, timeout=10
+            ) as s:
+                s.send_message(msg)
+        except Exception as e:
+            log.warning("notify_email failed: %s", e)
+            return "smtp_failed"
+    return "ok"
+
+
+@celery.task(name="app.workers.tasks.refresh_clamav_signatures")
+def refresh_clamav_signatures() -> str:
+    # ClamAV auto-refreshes via freshclam; hook is a placeholder for future logic.
+    return "noop"
+
+
+def _connector_row_events(row: dict) -> tuple[tuple[RevenueEventType, int, int], ...]:
+    return (
+        (RevenueEventType.VISIT, int(row.get("visits") or 0), 0),
+        (RevenueEventType.SIGNUP, int(row.get("signups") or 0), 0),
+        (RevenueEventType.LEAD, int(row.get("leads") or 0), 0),
+        (RevenueEventType.CUSTOMER, int(row.get("customers") or 0), 0),
+        (
+            RevenueEventType.REVENUE,
+            1 if row.get("revenue_cents") else 0,
+            int(row.get("revenue_cents") or 0),
+        ),
+    )
+
+
+def _upsert_connector_event(
+    db,
+    *,
+    connector: AnalyticsConnector,
+    row: dict,
+    event_type: RevenueEventType,
+    event_count: int,
+    amount_cents: int,
+    occurred_at,
+) -> bool:
+    source_url = row.get("source_url")
+    channel = normalize_channel(
+        connector.provider.value, source_url, row.get("channel")
+    )
+    external_id = row.get("external_id")
+    key = event_dedupe_key(
+        tenant_id=connector.tenant_id,
+        provider=connector.provider.value,
+        event_type=event_type.value,
+        content_piece_id=None,
+        source_url=source_url,
+        occurred_at=occurred_at,
+        external_id=external_id,
+    )
+    event = (
+        db.query(RevenueEvent)
+        .filter(
+            RevenueEvent.tenant_id == connector.tenant_id,
+            RevenueEvent.dedupe_key == key,
+            RevenueEvent.is_deleted.is_(False),
+        )
+        .one_or_none()
+    )
+    metadata = {
+        "provider": connector.provider.value,
+        "channel": channel,
+        "connector_id": str(connector.id),
+        **({"external_id": external_id} if external_id else {}),
+        **(row.get("metadata") or {}),
+    }
+    if event:
+        event.owner_id = connector.owner_id
+        event.event_count = event_count
+        event.amount_cents = amount_cents
+        event.currency = row.get("currency") or "USD"
+        event.provider = connector.provider.value
+        event.channel = channel
+        event.source_url = source_url
+        event.occurred_at = occurred_at
+        event.metadata_json = metadata
+        return False
+    db.add(
+        RevenueEvent(
+            tenant_id=connector.tenant_id,
+            owner_id=connector.owner_id,
+            content_piece_id=None,
+            event_type=event_type,
+            event_count=event_count,
+            amount_cents=amount_cents,
+            currency=row.get("currency") or "USD",
+            provider=connector.provider.value,
+            channel=channel,
+            dedupe_key=key,
+            source_url=source_url,
+            occurred_at=occurred_at,
+            metadata_json=metadata,
+        )
+    )
+    return True
+
+
+def _refresh_connector_oauth(metadata: dict) -> dict:
+    oauth = dict(metadata.get("oauth") or {})
+    refresh_token = oauth.get("refresh_token")
+    if not refresh_token:
+        return metadata
+    if not (settings.GOOGLE_OAUTH_CLIENT_ID and settings.GOOGLE_OAUTH_CLIENT_SECRET):
+        return metadata
+    token = _run(
+        refresh_google_access_token(
+            client_id=settings.GOOGLE_OAUTH_CLIENT_ID,
+            client_secret=settings.GOOGLE_OAUTH_CLIENT_SECRET,
+            refresh_token=refresh_token,
+        )
+    )
+    oauth["access_token"] = token["access_token"]
+    oauth["expires_in"] = token.get("expires_in")
+    oauth["token_type"] = token.get("token_type", oauth.get("token_type"))
+    oauth["scope"] = token.get("scope", oauth.get("scope"))
+    oauth["last_refreshed_at"] = datetime.now(timezone.utc).isoformat()
+    metadata["oauth"] = oauth
+    return metadata
+
+
+# -----------------------------------------------------------------------------
+# Analytics connector sync (cpu_light queue)
+# -----------------------------------------------------------------------------
+@celery.task(name="app.workers.tasks.sync_connected_analytics_connectors")
+def sync_connected_analytics_connectors() -> str:
+    with _SyncSession() as db:
+        connectors = (
+            db.query(AnalyticsConnector.id)
+            .filter(
+                AnalyticsConnector.status == AnalyticsConnectorStatus.CONNECTED,
+                AnalyticsConnector.is_deleted.is_(False),
+            )
+            .all()
+        )
+    for (connector_id,) in connectors:
+        sync_analytics_connector.delay(str(connector_id))
+    return f"queued:{len(connectors)}"
+
+
+@celery.task(name="app.workers.tasks.sync_analytics_connector")
+def sync_analytics_connector(connector_id: str) -> str:
+    """Run one connector sync attempt.
+
+    The provider API fetch/mapping lands in the next slice; this task owns the
+    durable state transition so UI/API can safely trigger and observe syncs.
+    """
+    with _SyncSession() as db:
+        connector = db.get(AnalyticsConnector, UUID(connector_id))
+        if not connector or connector.is_deleted:
+            return "missing"
+        if connector.status != AnalyticsConnectorStatus.CONNECTED:
+            return "skip"
+        connector.status = AnalyticsConnectorStatus.SYNCING
+        connector.last_sync_error = None
+        db.commit()
+
+        try:
+            metadata = dict(connector.metadata_json or {})
+            metadata = _refresh_connector_oauth(metadata)
+            oauth = metadata.get("oauth") or {}
+            if not oauth.get("access_token"):
+                raise RuntimeError("missing_oauth_access_token")
+            start, end = default_sync_window()
+            if connector.provider == AnalyticsConnectorProvider.GSC:
+                if not connector.site_url:
+                    raise RuntimeError("missing_gsc_site_url")
+                rows = _run(
+                    fetch_gsc_rows(
+                        access_token=oauth["access_token"],
+                        site_url=connector.site_url,
+                        start=start,
+                        end=end,
+                    )
+                )
+            elif connector.provider == AnalyticsConnectorProvider.GA4:
+                if not connector.external_property_id:
+                    raise RuntimeError("missing_ga4_property_id")
+                rows = _run(
+                    fetch_ga4_rows(
+                        access_token=oauth["access_token"],
+                        property_id=connector.external_property_id,
+                        site_url=connector.site_url,
+                        start=start,
+                        end=end,
+                    )
+                )
+            else:
+                raise RuntimeError("unsupported_provider")
+
+            imported = 0
+            occurred_at = datetime.combine(
+                end, datetime.min.time(), tzinfo=timezone.utc
+            )
+            for row in rows:
+                for event_type, event_count, amount_cents in _connector_row_events(row):
+                    if event_count:
+                        created = _upsert_connector_event(
+                            db,
+                            connector=connector,
+                            row=row,
+                            event_type=event_type,
+                            event_count=event_count,
+                            amount_cents=amount_cents,
+                            occurred_at=occurred_at,
+                        )
+                        if created:
+                            imported += 1
+            sync = dict(metadata.get("sync") or {})
+            sync["last_attempt"] = "provider_fetch_complete"
+            sync["last_window"] = {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+            }
+            sync["last_imported_events"] = imported
+            sync["last_rows"] = len(rows)
+            metadata["sync"] = sync
+            connector.metadata_json = metadata
+            connector.last_sync_at = datetime.now(timezone.utc)
+            connector.status = AnalyticsConnectorStatus.CONNECTED
+            db.commit()
+            return "queued_provider_fetch"
+        except Exception as e:
+            connector.status = AnalyticsConnectorStatus.ERROR
+            connector.last_sync_error = f"{e.__class__.__name__}: {e}"[:500]
+            db.commit()
+            return "failed"
+
+
+# -----------------------------------------------------------------------------
+# Brand DNA extraction (cpu_light queue)
+# -----------------------------------------------------------------------------
+def _parse_profile_json(raw: str) -> dict:
+    """Best-effort parse of the model's JSON profile (tolerates fences/prose)."""
+    text = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            obj = json.loads(text[start : end + 1])
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+    return {"extraction_notes": raw[:2000]}
+
+
+_BRAND_SYSTEM = (
+    "You extract a brand profile from website text. Respond with ONLY a JSON "
+    "object with keys: tone (string), palette (array of hex color strings), "
+    "tagline (string), audience (string), pains (array of strings), "
+    "do_phrases (array of strings), dont_phrases (array of strings). "
+    "Use empty values when unknown. No prose, no code fences."
+)
+
+
+@celery.task(
+    bind=True,
+    name="app.workers.tasks.build_brand_profile",
+    max_retries=1,
+    default_retry_delay=20,
+)
+def build_brand_profile(self, brand_id: str) -> str:
+    with _SyncSession() as db:
+        brand = db.get(Brand, UUID(brand_id))
+        if not brand:
+            return "missing"
+        if not brand.source_url:
+            brand.status = BrandStatus.READY
+            brand.profile = brand.profile or {}
+            db.commit()
+            return "no_url"
+
+        brand.status = BrandStatus.SCRAPING
+        db.commit()
+        try:
+            site = fetch_site(brand.source_url)
+        except UnsafeURLError as e:
+            brand.status = BrandStatus.FAILED
+            brand.error_message = f"unsafe url: {e}"[:500]
+            db.commit()
+            return "unsafe"
+        except Exception as e:
+            brand.status = BrandStatus.FAILED
+            brand.error_message = f"fetch failed: {e.__class__.__name__}"[:500]
+            db.commit()
+            return "fetch_failed"
+
+        brand.status = BrandStatus.EXTRACTING
+        db.commit()
+        user_msg = (
+            f"Title: {site.get('title')}\n"
+            f"Description: {site.get('description')}\n\n"
+            f"Website text:\n{site.get('text', '')}"
+        )
+        try:
+            raw = _run(
+                chat_completion(
+                    messages=[
+                        {"role": "system", "content": _BRAND_SYSTEM},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    model=settings.DEFAULT_LLM_MODEL,
+                    temperature=0.2,
+                )
+            )
+        except Exception as e:
+            brand.status = BrandStatus.FAILED
+            brand.error_message = f"extract failed: {e.__class__.__name__}"[:500]
+            db.commit()
+            raise self.retry(exc=e)
+
+        profile = _parse_profile_json(raw)
+        if site.get("theme_color") and not profile.get("palette"):
+            profile["palette"] = [site["theme_color"]]
+        profile.setdefault("source_title", site.get("title"))
+        brand.profile = profile
+        brand.status = BrandStatus.READY
+        db.commit()
+    return "ok"

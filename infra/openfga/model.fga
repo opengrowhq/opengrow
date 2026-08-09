@@ -1,0 +1,37 @@
+model
+  schema 1.1
+
+type user
+
+type tenant
+  relations
+    define member: [user]
+    define admin: [user]
+
+type asset
+  relations
+    define tenant: [tenant]
+    define owner: [user]
+    define reader: [user] or member from tenant or admin from tenant or owner
+    define writer: [user] or admin from tenant or owner
+
+type generation
+  relations
+    define tenant: [tenant]
+    define owner: [user]
+    define reader: [user] or member from tenant or admin from tenant or owner
+    define writer: [user] or admin from tenant or owner
+
+type content_piece
+  relations
+    define tenant: [tenant]
+    define owner: [user]
+    define reader: [user] or member from tenant or admin from tenant or owner
+    define writer: [user] or admin from tenant or owner
+
+type brand
+  relations
+    define tenant: [tenant]
+    define owner: [user]
+    define reader: [user] or member from tenant or admin from tenant or owner
+    define writer: [user] or admin from tenant or owner

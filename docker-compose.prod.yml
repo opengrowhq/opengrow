@@ -1,0 +1,103 @@
+# =============================================================================
+# OpenGrow — Production Overlay (Debian single-server)
+# =============================================================================
+# Bring-up:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# =============================================================================
+
+services:
+  # ---- No exposed host ports for infra; only Caddy is public ----
+  postgres:
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 4G }
+
+  redis:
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+
+  qdrant:
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 4G }
+
+  minio:
+    deploy:
+      resources:
+        limits: { cpus: "1.5", memory: 2G }
+
+  clamav:
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 2G }
+
+  openfga:
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+
+  infisical:
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+
+  litellm:
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+
+  fastapi-core:
+    build:
+      target: prod
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    deploy:
+      replicas: 2
+      resources:
+        limits: { cpus: "2.0", memory: 2G }
+
+  celery-worker-light:
+    deploy:
+      replicas: 2
+      resources:
+        limits: { cpus: "2.0", memory: 2G }
+
+  celery-worker-heavy:
+    deploy:
+      replicas: 1
+      resources:
+        limits: { cpus: "4.0", memory: 8G }
+
+  celery-beat:
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512M }
+
+  flower:
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512M }
+    # Not publicly exposed; access via Caddy basic-auth block
+
+  node-gateway:
+    build:
+      target: prod
+    command: ["node", "dist/server.js"]
+    deploy:
+      replicas: 2
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+
+  caddy:
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"       # HTTP/3
+    volumes:
+      - ./infra/caddy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN}
+      CADDY_EMAIL: ${CADDY_EMAIL}
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }

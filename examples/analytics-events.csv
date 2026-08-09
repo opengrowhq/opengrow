@@ -1,0 +1,6 @@
+content_piece_id,source_url,channel,external_id,visits,signups,leads,customers,revenue_cents,currency,occurred_at
+,https://example.com/blog/why-your-ci-pipeline-breaks-on-fridays,organic_search,,142,0,0,0,0,USD,2026-07-01T09:00:00Z
+,https://example.com/blog/why-your-ci-pipeline-breaks-on-fridays,organic_search,,98,3,0,0,0,USD,2026-07-08T09:00:00Z
+,https://example.com/blog/why-your-ci-pipeline-breaks-on-fridays,newsletter,,215,12,2,0,0,USD,2026-07-15T09:00:00Z
+,https://example.com/blog/one-click-deploy-tools-real-cost,organic_search,,64,1,0,0,0,USD,2026-07-08T09:00:00Z
+,https://example.com/blog/one-click-deploy-tools-real-cost,twitter,,301,18,4,1,0,USD,2026-07-10T09:00:00Z

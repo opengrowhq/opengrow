@@ -1,0 +1,4 @@
+content_piece_id,source_url,channel,external_id,visits,signups,leads,customers,revenue_cents,currency,occurred_at
+,https://example.com/blog/one-click-deploy-tools-real-cost,twitter,,0,0,0,1,4900,USD,2026-07-12T14:30:00Z
+,https://example.com/blog/onboard-engineer-first-pr-under-an-hour,organic_search,,0,0,0,1,14900,USD,2026-07-20T11:15:00Z
+,https://example.com/blog/why-your-ci-pipeline-breaks-on-fridays,newsletter,,0,0,0,1,4900,USD,2026-07-22T16:45:00Z

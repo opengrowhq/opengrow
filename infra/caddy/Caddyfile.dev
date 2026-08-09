@@ -1,0 +1,10 @@
+# Dev — HTTP only. Frontend hits node-gateway directly via 127.0.0.1:3001.
+:80 {
+	@gw path /auth/* /api/*
+	reverse_proxy @gw node-gateway:3001
+
+	@core path /docs /openapi.json
+	reverse_proxy @core fastapi-core:8000
+
+	respond / "OpenGrow dev — see /auth or /api" 200
+}

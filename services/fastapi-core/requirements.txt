@@ -1,0 +1,73 @@
+# =============================================================================
+# fastapi-core Python dependencies — pinned to LATEST available at time of write
+# =============================================================================
+# Pinning strategy:
+#   - Bump every package to its current PyPI latest UNLESS a specific
+#     downstream compat constraint pins it lower.
+#   - Every deviation from latest must include a comment explaining why.
+#   - Dependabot version updates run monthly (grouped) and keep this file
+#     current going forward.
+# =============================================================================
+
+# Web framework
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+
+# Data models
+pydantic[email]==2.13.4
+pydantic-settings==2.14.2
+
+# Database
+sqlalchemy[asyncio]==2.0.51
+asyncpg==0.31.0
+alembic==1.18.5
+psycopg2-binary==2.9.12
+
+# Task queue
+celery[redis]==5.6.3
+flower==2.0.1
+redis==5.3.1
+# NOTE: kept in v5.x — v8.x is a major and includes breaking changes to
+# connection-pool + auth APIs that Celery 5.6 hasn't caught up to yet.
+
+# Storage / infra
+qdrant-client==1.18.0
+minio==7.2.20
+
+# Uploads
+python-multipart==0.0.32
+
+# Auth
+PyJWT[crypto]==2.13.0
+passlib==1.7.4
+# NOTE: passlib 1.7.4 hasn't been updated since 2020 and breaks against bcrypt
+# >= 4.1 (turns the "password > 72 bytes will be truncated" warning into an
+# error). Pin bcrypt below the breaking version until passlib 2.x lands OR
+# we migrate to `argon2-cffi` / `passlib.hash.argon2`.
+bcrypt==4.0.1
+
+# HTTP
+httpx==0.28.1
+
+# LLM abstraction (ALL model calls route here)
+litellm==1.95.0
+
+# ReBAC
+openfga-sdk==0.10.4
+
+# AV
+clamd==1.0.2
+
+# Utilities
+tenacity==9.1.4
+structlog==26.1.0
+prometheus-client==0.26.0
+
+# Dev / test
+ruff==0.16.1
+pytest==9.1.1
+pytest-asyncio==1.4.0
+
+# Infisical SDK — install manually in production; scaffold uses env-var
+# fallback via try/except in app/core/secrets.py. Package naming is unstable
+# across SDK versions (infisical-python vs infisicalsdk), so we do not pin it.

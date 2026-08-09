@@ -1,0 +1,42 @@
+Sample brand-voice source text for a fictional founder-led B2B SaaS company.
+
+Feed this to the /brands endpoint (or paste it as source content during brand
+extraction) to see how OpenGrow derives a Brand profile: tone, tagline,
+audience, pains, and do/don't phrases.
+
+---
+
+About Stackhand
+
+Stackhand is deployment tooling for small engineering teams who are tired of
+fighting YAML. We built it because our own team spent more time debugging CI
+configs than shipping features. Stackhand turns a repo into a working
+deploy pipeline in under ten minutes, no infra background required.
+
+We write like the engineers we build for: direct, a little informal, allergic
+to buzzwords. We don't say "leverage synergies" or "best-in-class." We say
+what a feature does and why it matters, and we're honest when something is
+still rough around the edges.
+
+Our audience is technical founders and the first 2-5 engineers at a startup —
+people who could build this themselves but would rather not spend three
+months doing it. They've been burned by tools that promise "one-click deploys"
+and then need a consulting engagement to actually configure. They want
+something that works today, is easy to leave if it stops working for them,
+and doesn't lock them into a specific cloud vendor.
+
+Pains we hear constantly: CI configs that only the person who wrote them can
+touch, deploy pipelines that silently break on a Friday, and onboarding a new
+engineer taking half a day just to get their first PR deployed.
+
+Tagline: "Ship without the YAML tax."
+
+Do:
+- Use concrete numbers and timeframes ("under ten minutes," not "fast")
+- Acknowledge tradeoffs honestly
+- Write like a peer engineer, not a marketing team
+
+Don't:
+- Use "revolutionize," "game-changer," "next-generation"
+- Promise zero-config when configuration is actually required
+- Talk down to the reader — assume they're competent

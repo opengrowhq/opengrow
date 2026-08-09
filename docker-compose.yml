@@ -1,0 +1,363 @@
+# =============================================================================
+# OpenGrow — Base Compose (shared by dev + prod)
+# =============================================================================
+# Override with:
+#   docker-compose.override.yml  (dev — auto-loaded)
+#   docker-compose.prod.yml      (prod — explicit: -f docker-compose.yml -f docker-compose.prod.yml)
+# =============================================================================
+
+x-secrets-env: &secrets-env
+  INFISICAL_URL: ${INFISICAL_URL}
+  INFISICAL_PROJECT_ID: ${INFISICAL_PROJECT_ID}
+  INFISICAL_ENVIRONMENT: ${INFISICAL_ENVIRONMENT}
+  INFISICAL_TOKEN: ${INFISICAL_TOKEN}
+
+x-infra-env: &infra-env
+  POSTGRES_HOST: ${POSTGRES_HOST}
+  POSTGRES_PORT: ${POSTGRES_PORT}
+  POSTGRES_DB: ${POSTGRES_DB}
+  POSTGRES_USER: ${POSTGRES_USER}
+  REDIS_HOST: ${REDIS_HOST}
+  REDIS_PORT: ${REDIS_PORT}
+  REDIS_BROKER_DB: ${REDIS_BROKER_DB}
+  REDIS_RESULT_DB: ${REDIS_RESULT_DB}
+  REDIS_CACHE_DB: ${REDIS_CACHE_DB}
+  QDRANT_HOST: ${QDRANT_HOST}
+  QDRANT_PORT: ${QDRANT_PORT}
+  MINIO_HOST: ${MINIO_HOST}
+  MINIO_PORT: ${MINIO_PORT}
+  MINIO_BUCKET_ASSETS: ${MINIO_BUCKET_ASSETS}
+  MINIO_BUCKET_TEMP: ${MINIO_BUCKET_TEMP}
+  CLAMAV_HOST: ${CLAMAV_HOST}
+  CLAMAV_PORT: ${CLAMAV_PORT}
+  OPENFGA_API_URL: ${OPENFGA_API_URL}
+  LITELLM_URL: ${LITELLM_URL}
+  MAILPIT_HOST: ${MAILPIT_HOST}
+  MAILPIT_SMTP_PORT: ${MAILPIT_SMTP_PORT}
+  OPENGROW_ENV: ${OPENGROW_ENV}
+  HOSTED_MODE: ${HOSTED_MODE}
+
+networks:
+  opengrow:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  minio_data:
+  clamav_data:
+  openfga_data:
+  infisical_data:
+  caddy_data:
+  caddy_config:
+
+services:
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets:
+      - pg_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [opengrow]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks: [opengrow]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  qdrant:
+    image: qdrant/qdrant:v1.11.3
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks: [opengrow]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:6333/readyz | grep -q ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-10-29T16-01-48Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER_FILE: /run/secrets/minio_root_user
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+    secrets:
+      - minio_root_user
+      - minio_root_password
+    volumes:
+      - minio_data:/data
+    networks: [opengrow]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  clamav:
+    image: clamav/clamav:1.4
+    restart: unless-stopped
+    volumes:
+      - clamav_data:/var/lib/clamav
+    networks: [opengrow]
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 5m
+
+  openfga:
+    image: openfga/openfga:v1.6.2
+    restart: unless-stopped
+    command: run
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI_FILE: /run/secrets/openfga_datastore_uri
+      OPENFGA_LOG_FORMAT: json
+      OPENFGA_PLAYGROUND_ENABLED: "true"
+    secrets:
+      - openfga_datastore_uri
+    volumes:
+      - openfga_data:/data
+    networks: [opengrow]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "grpc_health_probe -addr=localhost:8081 || wget -qO- http://localhost:8080/healthz | grep -qi ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  infisical:
+    image: infisical/infisical:v0.90.1-postgres
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      ENCRYPTION_KEY_FILE: /run/secrets/infisical_encryption_key
+      AUTH_SECRET_FILE: /run/secrets/infisical_auth_secret
+      DB_CONNECTION_URI_FILE: /run/secrets/infisical_db_uri
+      REDIS_URL: redis://redis:6379/3
+      SITE_URL: ${INFISICAL_URL}
+    secrets:
+      - infisical_encryption_key
+      - infisical_auth_secret
+      - infisical_db_uri
+    volumes:
+      - infisical_data:/app/data
+    networks: [opengrow]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/status || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-v1.51.3-stable
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY_FILE: /run/secrets/litellm_master_key
+      DATABASE_URL_FILE: /run/secrets/litellm_db_uri
+    secrets:
+      - litellm_master_key
+      - litellm_db_uri
+    volumes:
+      - ./infra/litellm/config.yaml:/app/config.yaml:ro
+    networks: [opengrow]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4000/health/liveliness || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Application
+  # ---------------------------------------------------------------------------
+  fastapi-core:
+    build:
+      context: ./services/fastapi-core
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: [*secrets-env, *infra-env]
+      SERVICE_NAME: fastapi-core
+    networks: [opengrow]
+    depends_on:
+      postgres:  { condition: service_healthy }
+      redis:     { condition: service_healthy }
+      qdrant:    { condition: service_healthy }
+      minio:     { condition: service_healthy }
+      openfga:   { condition: service_healthy }
+      infisical: { condition: service_healthy }
+      litellm:   { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  celery-worker-light:
+    build:
+      context: ./services/fastapi-core
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "-Q", "cpu_light", "-n", "worker-light@%h", "--concurrency=4"]
+    environment:
+      <<: [*secrets-env, *infra-env]
+      SERVICE_NAME: celery-worker-light
+    networks: [opengrow]
+    depends_on:
+      fastapi-core: { condition: service_healthy }
+      clamav:       { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d worker-light@$$(hostname) || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+
+  celery-worker-heavy:
+    build:
+      context: ./services/fastapi-core
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "-Q", "gen_heavy", "-n", "worker-heavy@%h", "--concurrency=2"]
+    environment:
+      <<: [*secrets-env, *infra-env]
+      SERVICE_NAME: celery-worker-heavy
+    networks: [opengrow]
+    depends_on:
+      fastapi-core: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d worker-heavy@$$(hostname) || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+
+  celery-beat:
+    build:
+      context: ./services/fastapi-core
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app", "beat", "--loglevel=info"]
+    environment:
+      <<: [*secrets-env, *infra-env]
+      SERVICE_NAME: celery-beat
+    networks: [opengrow]
+    depends_on:
+      fastapi-core: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'celery.*beat' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  flower:
+    build:
+      context: ./services/fastapi-core
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app", "flower", "--port=5555"]
+    environment:
+      <<: [*secrets-env, *infra-env]
+      SERVICE_NAME: flower
+    networks: [opengrow]
+    depends_on:
+      fastapi-core: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5555/healthcheck || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+
+  node-gateway:
+    build:
+      context: ./services/node-gateway
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *secrets-env
+      SERVICE_NAME: node-gateway
+      FASTAPI_URL: http://fastapi-core:8000
+      NODE_ENV: production
+    networks: [opengrow]
+    depends_on:
+      fastapi-core: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    networks: [opengrow]
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      node-gateway: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+# ---------------------------------------------------------------------------
+# Secrets — mounted files; contents populated at bootstrap from Infisical.
+# ---------------------------------------------------------------------------
+secrets:
+  pg_password:
+    file: ./infra/secrets/pg_password
+  minio_root_user:
+    file: ./infra/secrets/minio_root_user
+  minio_root_password:
+    file: ./infra/secrets/minio_root_password
+  openfga_datastore_uri:
+    file: ./infra/secrets/openfga_datastore_uri
+  infisical_encryption_key:
+    file: ./infra/secrets/infisical_encryption_key
+  infisical_auth_secret:
+    file: ./infra/secrets/infisical_auth_secret
+  infisical_db_uri:
+    file: ./infra/secrets/infisical_db_uri
+  litellm_master_key:
+    file: ./infra/secrets/litellm_master_key
+  litellm_db_uri:
+    file: ./infra/secrets/litellm_db_uri

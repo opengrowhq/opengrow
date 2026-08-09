@@ -1,0 +1,15 @@
+source: obra/superpowers@3dcbd5c
+upstream: https://github.com/obra/superpowers
+license: MIT (see ./LICENSE) — Copyright (c) 2025 Jesse Vincent
+
+The development-process skills here (brainstorming, writing-plans,
+executing-plans, subagent-driven-development, systematic-debugging,
+test-driven-development, using-git-worktrees, using-superpowers,
+verification-before-completion, writing-skills, dispatching-parallel-agents,
+finishing-a-development-branch, requesting-code-review, receiving-code-review)
+are vendored from that commit.
+
+MIT permits redistribution inside this AGPL-3.0 project, but only with the
+copyright notice retained — hence ./LICENSE. It covers the vendored skills
+above; everything else in this directory is OpenGrow's own work under the
+repository's AGPL-3.0 licence.

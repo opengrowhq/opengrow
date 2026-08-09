@@ -1,0 +1,261 @@
+# =============================================================================
+# OpenGrow — Lite Compose (Personal / Single-tenant)
+# =============================================================================
+# Use this for personal blog/marketing automation on your laptop or a small VPS.
+# 5 services, ~2 GB RAM floor, ~5 min setup.
+#
+# Skips: OpenFGA (stub allows all), Infisical (env vars), ClamAV (auto-clean),
+# Qdrant (embed generated but not stored), LiteLLM proxy (in-process library),
+# node-gateway (direct FastAPI on :8000), celery-worker-heavy, celery-beat, flower,
+# Caddy (bind FastAPI directly).
+#
+# Bring-up:
+#   cp .env.lite.example .env
+#   $EDITOR .env                              # set OPENAI_API_KEY etc.
+#   docker compose -f docker-compose.lite.yml up -d
+#   docker compose -f docker-compose.lite.yml exec fastapi-core alembic upgrade head
+#   docker compose -f docker-compose.lite.yml exec fastapi-core python -m scripts.seed
+#
+# For multi-tenant, security-hardened, or production deployments use
+# `docker compose up` (base compose) or `make prod-up`.
+# =============================================================================
+
+networks:
+  opengrow-lite:
+    driver: bridge
+
+volumes:
+  postgres_data_lite:
+  redis_data_lite:
+  minio_data_lite:
+  ollama_data_lite:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-opengrow}
+      POSTGRES_USER: ${POSTGRES_USER:-opengrow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opengrow-lite-change-me}
+    volumes:
+      - postgres_data_lite:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${HOST_POSTGRES_PORT:-5432}:5432"
+    networks: [opengrow-lite]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opengrow} -d ${POSTGRES_DB:-opengrow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data_lite:/data
+    ports:
+      - "127.0.0.1:${HOST_REDIS_PORT:-6379}:6379"
+    networks: [opengrow-lite]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-10-29T16-01-48Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-opengrow}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-opengrow-lite-change-me}
+    volumes:
+      - minio_data_lite:/data
+    ports:
+      - "127.0.0.1:${HOST_MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${HOST_MINIO_CONSOLE_PORT:-9001}:9001"
+    networks: [opengrow-lite]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  fastapi-core:
+    build:
+      context: ./services/fastapi-core
+      dockerfile: Dockerfile
+      target: dev
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    environment:
+      SERVICE_NAME: fastapi-core
+      OPENGROW_ENV: dev
+      DEPLOYMENT_MODE: lite
+      LITELLM_MODE: library
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:${HOST_FRONTEND_PORT:-3000},http://127.0.0.1:${HOST_FRONTEND_PORT:-3000}}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-opengrow}
+      POSTGRES_USER: ${POSTGRES_USER:-opengrow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opengrow-lite-change-me}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_BROKER_DB: 0
+      REDIS_RESULT_DB: 1
+      REDIS_CACHE_DB: 2
+      MINIO_HOST: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-opengrow}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-opengrow-lite-change-me}
+      MINIO_BUCKET_ASSETS: opengrow-assets
+      MINIO_BUCKET_TEMP: opengrow-temp
+      MAILPIT_HOST: mailpit
+      MAILPIT_SMTP_PORT: 1025
+      JWT_SECRET: ${JWT_SECRET:-change-me-jwt-secret-32-chars-min}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
+      DEFAULT_LLM_MODEL: ${DEFAULT_LLM_MODEL:-ollama/llama3.1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+    volumes:
+      - ./services/fastapi-core/app:/app/app:rw
+      - ./services/fastapi-core/alembic:/app/alembic:rw
+      - ./services/fastapi-core/scripts:/app/scripts:rw
+      - ./services/fastapi-core/tests:/app/tests:rw
+      - ./services/fastapi-core/pytest.ini:/app/pytest.ini:ro
+    ports:
+      - "127.0.0.1:${HOST_FASTAPI_PORT:-8000}:8000"
+      - "[::1]:${HOST_FASTAPI_PORT:-8000}:8000"
+    networks: [opengrow-lite]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      minio:    { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  celery-worker:
+    build:
+      context: ./services/fastapi-core
+      dockerfile: Dockerfile
+      target: dev
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "-Q", "cpu_light,gen_heavy", "-n", "worker@%h", "--concurrency=2"]
+    environment:
+      SERVICE_NAME: celery-worker
+      OPENGROW_ENV: dev
+      DEPLOYMENT_MODE: lite
+      LITELLM_MODE: library
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-opengrow}
+      POSTGRES_USER: ${POSTGRES_USER:-opengrow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opengrow-lite-change-me}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_BROKER_DB: 0
+      REDIS_RESULT_DB: 1
+      REDIS_CACHE_DB: 2
+      MINIO_HOST: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-opengrow}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-opengrow-lite-change-me}
+      MINIO_BUCKET_ASSETS: opengrow-assets
+      MINIO_BUCKET_TEMP: opengrow-temp
+      MAILPIT_HOST: mailpit
+      MAILPIT_SMTP_PORT: 1025
+      JWT_SECRET: ${JWT_SECRET:-change-me-jwt-secret-32-chars-min}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
+      DEFAULT_LLM_MODEL: ${DEFAULT_LLM_MODEL:-ollama/llama3.1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+    volumes:
+      - ./services/fastapi-core/app:/app/app:rw
+    networks: [opengrow-lite]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      fastapi-core: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d worker@$$(hostname) | grep -q pong"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  mailpit:
+    image: axllent/mailpit:v1.20
+    restart: unless-stopped
+    networks: [opengrow-lite]
+    ports:
+      - "127.0.0.1:${HOST_MAILPIT_UI_PORT:-8025}:8025"    # UI
+      - "127.0.0.1:${HOST_MAILPIT_SMTP_PORT:-1025}:1025"  # SMTP
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8025 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./services/frontend
+      dockerfile: Dockerfile
+      target: dev
+    restart: unless-stopped
+    environment:
+      # Browser-side base URL — must be the HOST-published fastapi-core port,
+      # since the fetch runs in the user's browser, not inside the container.
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8000}
+      # Public origin, used to resolve the og:image URL to an absolute one.
+      # NEXT_PUBLIC_* is inlined when the app compiles, so a production image
+      # must receive this at BUILD time; it works as a runtime var here only
+      # because lite runs `next dev`, which compiles on demand.
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+      NEXT_TELEMETRY_DISABLED: "1"
+      WATCHPACK_POLLING: "true"  # reliable file-watching over bind mounts (macOS)
+    volumes:
+      - ./services/frontend:/app
+      - /app/node_modules  # keep container's Linux deps, not the host's
+      - /app/.next
+    ports:
+      - "127.0.0.1:${HOST_FRONTEND_PORT:-3000}:3000"
+      - "[::1]:${HOST_FRONTEND_PORT:-3000}:3000"
+    networks: [opengrow-lite]
+    depends_on:
+      fastapi-core: { condition: service_healthy }
+
+  # Local, free LLM — runs in-stack so no host install is needed. Point the app
+  # at it with OLLAMA_BASE_URL=http://ollama:11434 and DEFAULT_LLM_MODEL=ollama/<model>.
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data_lite:/root/.ollama
+    networks: [opengrow-lite]
+    ports:
+      - "127.0.0.1:${HOST_OLLAMA_PORT:-11434}:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 5

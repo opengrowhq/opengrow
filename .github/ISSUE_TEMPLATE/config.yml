@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: mailto:anaxagoras.kosta@gmail.com
+    about: Report security vulnerabilities privately by email. Do NOT open a public issue.
+  - name: Commercial license inquiry
+    url: mailto:anaxagoras.kosta@gmail.com
+    about: For enterprises whose legal teams cannot accept AGPL v3.

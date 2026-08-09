@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+ENV/
+.eggs/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# Environments + secrets
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+.env.bak*
+.env.backup*
+*.pem
+*.key
+credentials.json
+
+# Editor / IDE
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Docker
+docker-compose.override.yml
+
+# Local data
+data/
+tmp/
+*.db
+*.sqlite
+
+# AI / model artifacts (Ollama pulls)
+/models/
+.ollama/
+
+# Test outputs
+coverage/
+playwright-report/
+test-results/
+
+# Backup files
+*.bak
+*.orig
+
+# Internal planning/spec docs (superpowers workflow) — keep out of the public repo
+docs/superpowers/
+CLAUDE.md

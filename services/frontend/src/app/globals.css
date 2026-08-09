@@ -1,0 +1,166 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f5f7fa;
+  --foreground: #1f2937;
+
+  /* Premium design-system tokens (shared across app + marketing) */
+  /* Inter leads, via the self-hosted --font-inter that layout.tsx defines.
+     Ordering matters: Inter used to sit fourth here, behind ui-sans-serif, so
+     the platform UI face always won and the brand face never rendered. */
+  --font-premium: var(--font-inter), ui-sans-serif, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --grad: linear-gradient(90deg, #0B3B2E, #15803D, #16A34A);
+  --grad-br: linear-gradient(135deg, #0B3B2E, #15803D, #16A34A);
+
+  --radius-sm: 0.75rem;
+  --radius-md: 1rem;
+  --radius-lg: 1.5rem;
+  --radius-xl: 2rem;
+
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.06);
+  --shadow-lift: 0 24px 60px rgba(15, 23, 42, 0.12);
+  --shadow-glow: 0 14px 40px rgba(11, 59, 46, 0.22);
+
+  --app-canvas: #f5f7fa;
+}
+
+/* ---------------------------------------------------------------------------
+   SEMANTIC ROLE TOKENS
+   ---------------------------------------------------------------------------
+   Components reference these roles, never a raw hue. That is what makes a
+   brand change a change to THIS BLOCK instead of a sweep across call sites.
+
+   These now carry the BRAND (green) identity. The previous sky/pink/orange
+   gradient identity is retired.
+
+   Ratios (white text unless stated):
+     interactive       #15803D  5.02:1  (NOT the #16A34A accent — that is 3.30:1)
+     interactive-hover #12693A  6.37:1
+     focus  vs canvas  #15803D  4.67:1  (needs >= 3:1 as a focus indicator)
+     control vs white  #6B7280  4.83:1  (needs >= 3:1 as a control boundary)
+     content vs canvas #1F2937 13.68:1
+--------------------------------------------------------------------------- */
+@theme {
+  /* Brand anchors — read off the brand sheet. Fixed; do not retint. */
+  --color-brand-primary: #0b3b2e; /* Forest     */
+  --color-brand-accent: #16a34a; /* Grow Green — decoration only, 3.30:1 */
+  --color-brand-tint: #a7f3d0; /* Mint       */
+  --color-brand-ink: #1f2937; /* Ink        */
+
+  /* Brand green ramp (custom — NOT stock Tailwind green/emerald, or the
+     tint would silently become #BBF7D0). */
+  --color-og-green-200: #a7f3d0;
+  --color-og-green-400: #4ade80;
+  --color-og-green-600: #16a34a;
+  --color-og-green-700: #15803d;
+  --color-og-green-800: #12693a;
+  --color-og-green-900: #0e4f31;
+  --color-og-green-950: #0b3b2e;
+
+  /* Surfaces */
+  --color-canvas: #f5f7fa;
+  --color-surface: #ffffff;
+
+  /* Content */
+  --color-content: #1f2937;
+  --color-content-muted: #4b5563;
+  --color-content-placeholder: #6b7280;
+  --color-on-brand: #ffffff;
+
+  /* Interaction — #15803D, not the #16A34A accent: white on the accent is
+     3.30:1 and fails AA. #15803D is 5.02:1. */
+  --color-interactive: #15803d;
+  --color-interactive-hover: #12693a;
+  --color-accent: #16a34a;
+  --color-focus: #15803d;
+
+  /* Lines */
+  --color-hairline: #e5e7eb;
+  --color-control: #6b7280;
+  --color-focus-soft: #a7f3d0;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-premium);
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Keep a controlled light theme for design consistency (marketing + app are
+   light with a vibrant gradient accent). Dark mode is a future addition. */
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-premium);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+/* Utility helpers layered on top of Tailwind. */
+@layer utilities {
+  .text-gradient {
+    background: var(--grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .bg-grad {
+    background-image: var(--grad);
+  }
+  .bg-grad-br {
+    background-image: var(--grad-br);
+  }
+  .shadow-card {
+    box-shadow: var(--shadow-card);
+  }
+  .shadow-lift {
+    box-shadow: var(--shadow-lift);
+  }
+}
+
+/* Consistent, accessible focus ring for keyboard users. */
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Per-route fade, used by app/template.tsx. Deliberately CSS and not JS: a
+   `useReducedMotion()` branch changed the tree between server and client and
+   threw a hydration mismatch on every route. `both` holds the from-state before
+   the animation starts, so there is no flash of fully-opaque content; the
+   reduced-motion rule below collapses the duration and lands it at opacity 1. */
+@keyframes route-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+.route-fade {
+  animation: route-fade-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

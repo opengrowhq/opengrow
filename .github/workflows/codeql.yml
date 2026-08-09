@@ -1,0 +1,52 @@
+name: CodeQL
+
+# Static security analysis (the "security-extended" query suite) across the Python
+# backend and the JS/TS frontend + gateway. Results appear in the repo's
+# Security → Code scanning tab. (security-extended keeps thorough security coverage
+# without the maintainability/quality noise of security-and-quality.)
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4.37.4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+
+      # No compiled languages here, so autobuild is a no-op fallback.
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v4.37.4
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4.37.4
+        with:
+          category: "/language:${{ matrix.language }}"
