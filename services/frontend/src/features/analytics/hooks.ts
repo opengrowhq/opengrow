@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { loadToken } from "@/lib/auth";
 import {
+  type AnalyticsImportProvider,
   type AnalyticsWindow,
   createRevenueEvent,
   createAnalyticsConnector,
@@ -19,6 +20,7 @@ import {
   getSourceTrends,
   getTrackingStatus,
   importAnalyticsEvents,
+  importAnalyticsEventsCsv,
   listAnalyticsConnectors,
   syncAnalyticsConnector,
 } from "./api";
@@ -109,6 +111,20 @@ export function useImportAnalyticsEvents() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: importAnalyticsEvents,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["analytics"] }),
+  });
+}
+
+export function useImportAnalyticsEventsCsv() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      file,
+      provider,
+    }: {
+      file: File;
+      provider?: AnalyticsImportProvider;
+    }) => importAnalyticsEventsCsv(file, provider),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["analytics"] }),
   });
 }

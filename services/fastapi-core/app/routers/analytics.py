@@ -1,9 +1,21 @@
+import csv
+import io
 from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +50,7 @@ from app.schemas.analytics import (
     AnalyticsConnectorSyncOut,
     AnalyticsImportOut,
     AnalyticsImportRequest,
+    AnalyticsImportRow,
     AttributionDeltaOut,
     AttributionSummaryOut,
     AttributionTrendOut,
@@ -56,6 +69,39 @@ from app.schemas.analytics import (
 from app.workers.tasks import sync_analytics_connector
 
 router = APIRouter()
+
+CSV_CONTENT_TYPES = {"text/csv", "application/vnd.ms-excel", "text/plain"}
+MAX_IMPORT_CSV_BYTES = 2 * 1024 * 1024  # 2 MiB
+MAX_IMPORT_CSV_ROWS = 500  # matches AnalyticsImportRequest.rows max_length
+CSV_IMPORT_COLUMNS = {
+    "content_piece_id",
+    "source_url",
+    "channel",
+    "external_id",
+    "visits",
+    "signups",
+    "leads",
+    "customers",
+    "revenue_cents",
+    "currency",
+    "occurred_at",
+}
+
+
+def _csv_row_to_import_row(raw: dict[str, str | None]) -> AnalyticsImportRow:
+    cleaned: dict[str, object] = {}
+    for key in ("content_piece_id", "source_url", "channel", "external_id", "currency"):
+        value = (raw.get(key) or "").strip()
+        if value:
+            cleaned[key] = value
+    for key in ("visits", "signups", "leads", "customers", "revenue_cents"):
+        value = (raw.get(key) or "").strip()
+        if value:
+            cleaned[key] = int(value)
+    occurred_at = (raw.get("occurred_at") or "").strip()
+    if occurred_at:
+        cleaned["occurred_at"] = occurred_at
+    return AnalyticsImportRow.model_validate(cleaned)
 
 PIXEL_GIF = (
     b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
@@ -678,31 +724,31 @@ async def tracking_status(
     )
 
 
-@router.post("/import", response_model=AnalyticsImportOut)
-async def import_events(
-    payload: AnalyticsImportRequest,
-    current: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
+async def _import_rows(
+    db: AsyncSession,
+    current: User,
+    provider: str,
+    rows: list[AnalyticsImportRow],
+) -> AnalyticsImportOut:
     await _assert_tenant_writer(current)
     imported = 0
     cache: dict[str, RevenueEvent] = {}
-    for row in payload.rows:
+    for row in rows:
         cp_id = await _assert_content(db, current, row.content_piece_id)
         occurred_at = row.occurred_at or datetime.now(timezone.utc)
-        channel = normalize_channel(payload.provider, row.source_url, row.channel)
+        channel = normalize_channel(provider, row.source_url, row.channel)
         base = {
             "tenant_id": current.tenant_id,
             "owner_id": current.id,
             "content_piece_id": cp_id,
             "currency": row.currency,
-            "provider": payload.provider,
+            "provider": provider,
             "channel": channel,
             "source_url": row.source_url,
             "occurred_at": occurred_at,
             "external_id": row.external_id,
             "metadata_json": {
-                "provider": payload.provider,
+                "provider": provider,
                 "channel": channel,
                 **({"external_id": row.external_id} if row.external_id else {}),
                 **(row.metadata or {}),
@@ -737,7 +783,68 @@ async def import_events(
             if created:
                 imported += 1
     await db.commit()
-    return AnalyticsImportOut(imported_events=imported, imported_rows=len(payload.rows))
+    return AnalyticsImportOut(imported_events=imported, imported_rows=len(rows))
+
+
+@router.post("/import", response_model=AnalyticsImportOut)
+async def import_events(
+    payload: AnalyticsImportRequest,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    return await _import_rows(db, current, payload.provider, payload.rows)
+
+
+@router.post("/import/csv", response_model=AnalyticsImportOut)
+async def import_events_csv(
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    file: UploadFile,
+    provider: Annotated[str, Query(pattern=r"^(ga4|gsc|manual)$")] = "manual",
+):
+    if file.content_type not in CSV_CONTENT_TYPES and not (
+        file.filename or ""
+    ).lower().endswith(".csv"):
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Expected a .csv file"
+        )
+    data = await file.read(MAX_IMPORT_CSV_BYTES + 1)
+    if len(data) > MAX_IMPORT_CSV_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "CSV too large")
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "CSV must be UTF-8 encoded"
+        ) from exc
+
+    reader = csv.DictReader(io.StringIO(text))
+    if reader.fieldnames is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "CSV has no header row")
+    unknown = set(reader.fieldnames) - CSV_IMPORT_COLUMNS
+    if unknown:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Unknown CSV column(s): {', '.join(sorted(unknown))}",
+        )
+
+    rows: list[AnalyticsImportRow] = []
+    for line_no, raw in enumerate(reader, start=2):
+        try:
+            rows.append(_csv_row_to_import_row(raw))
+        except (ValueError, ValidationError) as exc:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"Row {line_no}: {exc}"
+            ) from exc
+    if not rows:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "CSV has no data rows")
+    if len(rows) > MAX_IMPORT_CSV_ROWS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"CSV has {len(rows)} rows; max is {MAX_IMPORT_CSV_ROWS}",
+        )
+
+    return await _import_rows(db, current, provider, rows)
 
 
 @router.get("/connectors", response_model=list[AnalyticsConnectorOut])
