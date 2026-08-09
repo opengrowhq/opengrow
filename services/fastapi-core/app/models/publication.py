@@ -17,6 +17,7 @@ class PublicationChannel(str, enum.Enum):
     X = "X"
     LINKEDIN = "LINKEDIN"
     EMAIL = "EMAIL"
+    SLACK = "SLACK"
 
 
 class PublicationStatus(str, enum.Enum):
