@@ -5,9 +5,16 @@ import { dollarsToCents } from "../import-form.mjs";
 
 const importMutate = vi.fn();
 const revenueMutate = vi.fn();
+const importCsvMutate = vi.fn();
 vi.mock("../hooks", () => ({
   useImportAnalyticsEvents: () => ({ mutate: importMutate, isPending: false }),
   useCreateRevenueEvent: () => ({ mutate: revenueMutate, isPending: false }),
+  useImportAnalyticsEventsCsv: () => ({
+    mutate: importCsvMutate,
+    isPending: false,
+    data: undefined,
+    error: null,
+  }),
 }));
 import { ImportRevenuePanel } from "./import-revenue-panel";
 
@@ -19,6 +26,7 @@ describe("ImportRevenuePanel", () => {
   beforeEach(() => {
     importMutate.mockClear();
     revenueMutate.mockClear();
+    importCsvMutate.mockClear();
   });
 
   it("renders import and manual revenue forms", () => {
@@ -94,5 +102,19 @@ describe("ImportRevenuePanel", () => {
     await user.click(within(section).getByRole("button", { name: "Save revenue event" }));
 
     expect(revenueMutate).not.toHaveBeenCalled();
+  });
+
+  it("uploads a selected CSV file with the currently selected provider", async () => {
+    const user = userEvent.setup();
+    render(<ImportRevenuePanel />);
+
+    const file = new File(["visits\n5\n"], "import.csv", { type: "text/csv" });
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await user.upload(input, file);
+
+    expect(importCsvMutate).toHaveBeenCalledTimes(1);
+    const [args] = importCsvMutate.mock.calls[0];
+    expect(args.file).toBe(file);
+    expect(args.provider).toBe("manual");
   });
 });

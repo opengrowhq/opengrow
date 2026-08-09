@@ -1,7 +1,11 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
+import pytest
+from pydantic import ValidationError
+
 from app.core.analytics_import import event_dedupe_key, normalize_channel
+from app.routers.analytics import _csv_row_to_import_row
 
 
 def test_normalize_channel_prefers_explicit_value():
@@ -50,6 +54,50 @@ def test_event_dedupe_key_is_stable_for_same_daily_window():
     )
 
     assert first == second
+
+
+def test_csv_row_to_import_row_parses_populated_fields():
+    row = _csv_row_to_import_row(
+        {
+            "source_url": "https://example.test/post",
+            "channel": "newsletter",
+            "visits": "12",
+            "signups": "3",
+            "revenue_cents": "4500",
+            "currency": "usd",
+            "occurred_at": "2026-08-01T00:00:00Z",
+        }
+    )
+    assert row.source_url == "https://example.test/post"
+    assert row.channel == "newsletter"
+    assert row.visits == 12
+    assert row.signups == 3
+    assert row.revenue_cents == 4500
+    assert row.currency == "USD"
+    assert row.occurred_at is not None
+
+
+def test_csv_row_to_import_row_treats_blank_cells_as_absent():
+    row = _csv_row_to_import_row(
+        {
+            "source_url": "",
+            "visits": "",
+            "revenue_cents": None,
+        }
+    )
+    assert row.source_url is None
+    assert row.visits == 0
+    assert row.revenue_cents == 0
+
+
+def test_csv_row_to_import_row_rejects_negative_counts():
+    with pytest.raises(ValidationError):
+        _csv_row_to_import_row({"visits": "-1"})
+
+
+def test_csv_row_to_import_row_rejects_non_integer_counts():
+    with pytest.raises(ValueError):
+        _csv_row_to_import_row({"visits": "not-a-number"})
 
 
 def test_event_dedupe_key_uses_external_id_when_present():

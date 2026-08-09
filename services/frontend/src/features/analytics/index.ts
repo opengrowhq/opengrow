@@ -13,6 +13,7 @@ export {
   useDisconnectAnalyticsConnector,
   useGoogleAuthUrl,
   useImportAnalyticsEvents,
+  useImportAnalyticsEventsCsv,
   useSourceAttribution,
   useSourceTrends,
   useSyncAnalyticsConnector,
