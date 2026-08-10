@@ -22,6 +22,7 @@ from app.routers import (
     content,
     generations,
     health,
+    invites,
     mcp,
     orchestrator,
     usage,
@@ -107,4 +108,5 @@ app.include_router(usage.router, prefix="/usage", tags=["usage"])
 app.include_router(billing.router, prefix="/billing", tags=["billing"])
 app.include_router(mcp.router, prefix="/mcp", tags=["mcp"])
 app.include_router(orchestrator.router, prefix="/orchestrator", tags=["orchestrator"])
+app.include_router(invites.router, prefix="/invites", tags=["invites"])
 app.include_router(audit.router, prefix="/audit", tags=["audit"])
