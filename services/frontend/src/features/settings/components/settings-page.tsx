@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { SettingsIcon } from "@/components/illustrations";
 import { useAuthGuard } from "@/features/auth";
 import { BillingCard } from "@/features/billing";
+import { TeamCard } from "@/features/team";
 import { GitHubConnectionCard } from "./github-connection-card";
 
 export function SettingsPage() {
@@ -19,6 +20,7 @@ export function SettingsPage() {
           subtitle="Workspace integrations and publishing connections."
         />
         <BillingCard />
+        <TeamCard />
         <GitHubConnectionCard />
       </main>
     </AppShell>
