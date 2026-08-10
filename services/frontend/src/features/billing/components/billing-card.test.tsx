@@ -10,15 +10,22 @@ vi.mock("../api", async (importOriginal) => {
     getSubscription: vi.fn(),
     createCheckout: vi.fn(),
     createPortalSession: vi.fn(),
+    createTopupCheckout: vi.fn(),
   };
 });
 
-import { getSubscription, createCheckout, createPortalSession } from "../api";
+import {
+  getSubscription,
+  createCheckout,
+  createPortalSession,
+  createTopupCheckout,
+} from "../api";
 import { BillingCard } from "./billing-card";
 
 const getSubscriptionMock = vi.mocked(getSubscription);
 const createCheckoutMock = vi.mocked(createCheckout);
 const createPortalSessionMock = vi.mocked(createPortalSession);
+const createTopupCheckoutMock = vi.mocked(createTopupCheckout);
 
 const freePlan = {
   billing_plan: "free",
@@ -103,6 +110,29 @@ describe("BillingCard", () => {
     await waitFor(() => {
       expect(createPortalSessionMock).toHaveBeenCalled();
       expect(window.location.href).toBe("https://stripe.test/portal/1");
+    });
+  });
+
+  it("shows credit top-up buttons only for a paid plan", async () => {
+    getSubscriptionMock.mockResolvedValue(freePlan);
+    renderCard();
+    expect(await screen.findByText("FREE")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /credit/ })).not.toBeInTheDocument();
+  });
+
+  it("redirects to the top-up Checkout URL when a tier is bought", async () => {
+    const user = userEvent.setup();
+    getSubscriptionMock.mockResolvedValue(proPlan);
+    createTopupCheckoutMock.mockResolvedValue({
+      checkout_url: "https://stripe.test/checkout/topup",
+    });
+    renderCard();
+
+    await user.click(await screen.findByRole("button", { name: "+€25 credit" }));
+
+    await waitFor(() => {
+      expect(createTopupCheckoutMock.mock.calls[0]?.[0]).toBe(2_500);
+      expect(window.location.href).toBe("https://stripe.test/checkout/topup");
     });
   });
 });

@@ -3,7 +3,12 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/data-display";
-import { useCreateCheckout, useCreatePortalSession, useSubscription } from "../hooks";
+import {
+  useCreateCheckout,
+  useCreatePortalSession,
+  useCreateTopupCheckout,
+  useSubscription,
+} from "../hooks";
 
 const PLAN_LABELS: Record<string, string> = {
   free: "Free",
@@ -11,10 +16,14 @@ const PLAN_LABELS: Record<string, string> = {
   team: "Team",
 };
 
+// Must match app.core.credits.TOPUP_TIERS_EUR_CENTS in the backend.
+const TOPUP_TIERS_EUR_CENTS = [1_000, 2_500, 5_000];
+
 export function BillingCard() {
   const { data: sub, isLoading } = useSubscription();
   const checkout = useCreateCheckout();
   const portal = useCreatePortalSession();
+  const topup = useCreateTopupCheckout();
   const [error, setError] = useState<string | null>(null);
 
   const plan = sub?.billing_plan ?? "free";
@@ -37,6 +46,16 @@ export function BillingCard() {
         window.location.href = result.portal_url;
       },
       onError: (e) => setError(e instanceof Error ? e.message : "Could not open billing portal"),
+    });
+  }
+
+  function buyTopup(amountEurCents: number) {
+    setError(null);
+    topup.mutate(amountEurCents, {
+      onSuccess: (result) => {
+        window.location.href = result.checkout_url;
+      },
+      onError: (e) => setError(e instanceof Error ? e.message : "Top-up checkout failed"),
     });
   }
 
@@ -90,6 +109,26 @@ export function BillingCard() {
           </>
         )}
       </div>
+
+      {isPaid && (
+        <div className="mt-4 border-t border-gray-100 pt-4">
+          <p className="text-xs font-medium text-gray-500">
+            Need more credit before your plan renews?
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {TOPUP_TIERS_EUR_CENTS.map((cents) => (
+              <Button
+                key={cents}
+                variant="secondary"
+                onClick={() => buyTopup(cents)}
+                loading={topup.isPending}
+              >
+                {`+€${cents / 100} credit`}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

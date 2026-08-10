@@ -20,7 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.auth import get_current_user
 from app.core.authz import authz_client
-from app.core.credits import PLAN_MONTHLY_GRANT_CENTS, grant_credits
+from app.core.credits import (
+    PLAN_MONTHLY_GRANT_CENTS,
+    TOPUP_TIERS_EUR_CENTS,
+    grant_credits,
+    topup_credit_cents,
+)
 from app.database import get_db
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.stripe_webhook_event import StripeWebhookEvent
@@ -31,6 +36,7 @@ from app.schemas.billing import (
     CheckoutRequest,
     PortalOut,
     SubscriptionOut,
+    TopupRequest,
 )
 
 router = APIRouter()
@@ -100,6 +106,56 @@ async def create_checkout(
             "success_url": f"{settings.FRONTEND_BASE_URL}/settings/billing?checkout=success",
             "cancel_url": f"{settings.FRONTEND_BASE_URL}/settings/billing?checkout=cancelled",
             "metadata": {"opengrow_tenant_id": str(tenant.id), "opengrow_plan": payload.plan},
+        }
+    )
+    return CheckoutOut(checkout_url=session.url)
+
+
+@router.post("/topup", response_model=CheckoutOut)
+async def create_topup_checkout(
+    payload: TopupRequest,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """One-time Checkout Session for a purchased credit top-up. Paid tiers
+    only — free tier isn't credit-gated at all, so buying credit it can't
+    spend would be pointless friction, not a real purchase."""
+    await _assert_tenant_admin(current)
+    if payload.amount_eur_cents not in TOPUP_TIERS_EUR_CENTS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"amount_eur_cents must be one of {TOPUP_TIERS_EUR_CENTS}",
+        )
+
+    client = _client()
+    tenant = await db.get(Tenant, current.tenant_id)
+    if tenant.billing_plan not in ("pro", "team"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Credit top-ups require a paid plan"
+        )
+    customer_id = await _get_or_create_stripe_customer(db, client, tenant, current)
+
+    session = client.v1.checkout.sessions.create(
+        params={
+            "mode": "payment",
+            "customer": customer_id,
+            "line_items": [
+                {
+                    "price_data": {
+                        "currency": "eur",
+                        "product_data": {"name": "OpenGrow credit top-up"},
+                        "unit_amount": payload.amount_eur_cents,
+                    },
+                    "quantity": 1,
+                }
+            ],
+            "success_url": f"{settings.FRONTEND_BASE_URL}/settings/billing?topup=success",
+            "cancel_url": f"{settings.FRONTEND_BASE_URL}/settings/billing?topup=cancelled",
+            "metadata": {
+                "opengrow_tenant_id": str(tenant.id),
+                "opengrow_kind": "credit_topup",
+                "opengrow_amount_eur_cents": str(payload.amount_eur_cents),
+            },
         }
     )
     return CheckoutOut(checkout_url=session.url)
@@ -201,13 +257,31 @@ async def _tenant_by_stripe_customer(db: AsyncSession, customer_id: str) -> Tena
 
 
 async def _handle_checkout_completed(db: AsyncSession, session: dict) -> None:
-    tenant_id = (session.get("metadata") or {}).get("opengrow_tenant_id")
+    meta = session.get("metadata") or {}
+    tenant_id = meta.get("opengrow_tenant_id")
     if not tenant_id:
         return
     tenant = await db.get(Tenant, tenant_id)
     if tenant is None:
         return
-    plan = (session.get("metadata") or {}).get("opengrow_plan", "pro")
+
+    if meta.get("opengrow_kind") == "credit_topup":
+        # payment_status guards against a Checkout Session completing for a
+        # $0 or deferred-payment edge case — only a genuinely paid session
+        # should ever grant purchased credit.
+        if session.get("payment_status") != "paid":
+            return
+        amount_eur_cents = int(meta.get("opengrow_amount_eur_cents", 0))
+        if amount_eur_cents <= 0:
+            return
+        await grant_credits(
+            db,
+            tenant_id=tenant.id,
+            amount_cents=topup_credit_cents(amount_eur_cents),
+        )
+        return
+
+    plan = meta.get("opengrow_plan", "pro")
     tenant.billing_plan = plan
     await db.commit()
 
