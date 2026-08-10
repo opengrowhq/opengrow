@@ -83,9 +83,11 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = ""
     OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
     # Model used for generation + Brand DNA when a request doesn't specify one.
-    # e.g. "gpt-4o-mini" (OpenAI), "claude-3-5-sonnet", "gemini-1.5-flash",
-    # or "llama3.1" (local Ollama, free).
-    DEFAULT_LLM_MODEL: str = "gpt-4o-mini"
+    # Must be LiteLLM-resolvable — bare OpenAI names work, other providers
+    # need their prefix (LiteLLM can't route/price the call otherwise):
+    # e.g. "gpt-5-mini" (OpenAI), "claude-sonnet-4-5" (Anthropic),
+    # "gemini/gemini-flash-latest" (Google), or "llama3.1" (local Ollama, free).
+    DEFAULT_LLM_MODEL: str = "gpt-5-mini"
     # Embedding model passed to LiteLLM. Defaults to a free local Ollama model
     # in lite mode (no OpenAI key required) and OpenAI's small embedding model
     # in production. Override via env var if you have a different Ollama

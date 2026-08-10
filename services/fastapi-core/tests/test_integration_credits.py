@@ -6,12 +6,14 @@ import pytest
 from sqlalchemy import select
 
 from app.core.credits import (
-    GENERATION_COST_CENTS,
     InsufficientCreditsError,
     debit_credits,
     grant_credits,
 )
 from app.models.tenant import Tenant
+
+_TEST_COST_CENTS = 5  # arbitrary — these tests exercise the debit/grant
+# mechanism itself, not any specific pricing.
 
 
 async def test_debit_credits_rejects_non_positive_cost(db, tenant_factory):
@@ -48,9 +50,9 @@ async def test_debit_credits_decreases_balance(db, tenant_factory):
     await grant_credits(db, tenant_id=acct["tenant"].id, amount_cents=100)
 
     new_balance = await debit_credits(
-        db, tenant_id=acct["tenant"].id, cost_cents=GENERATION_COST_CENTS
+        db, tenant_id=acct["tenant"].id, cost_cents=_TEST_COST_CENTS
     )
-    assert new_balance == 100 - GENERATION_COST_CENTS
+    assert new_balance == 100 - _TEST_COST_CENTS
 
 
 async def test_debit_credits_raises_402_when_insufficient(db, tenant_factory):
@@ -58,7 +60,7 @@ async def test_debit_credits_raises_402_when_insufficient(db, tenant_factory):
     # Balance starts at 0 (migration default).
     with pytest.raises(InsufficientCreditsError) as exc_info:
         await debit_credits(
-            db, tenant_id=acct["tenant"].id, cost_cents=GENERATION_COST_CENTS
+            db, tenant_id=acct["tenant"].id, cost_cents=_TEST_COST_CENTS
         )
     assert exc_info.value.status_code == 402
 

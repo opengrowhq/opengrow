@@ -52,7 +52,7 @@ def _run(coro):
 
 def _generate_text(brief: str, model: str) -> str:
     """Run the LLM for the given brief. Isolated so tests can monkeypatch it."""
-    return _run(
+    content, _resp = _run(
         chat_completion(
             messages=[
                 {"role": "system", "content": _SYSTEM},
@@ -61,6 +61,7 @@ def _generate_text(brief: str, model: str) -> str:
             model=model,
         )
     )
+    return content
 
 
 def _title_from_brief(brief: str) -> str:
@@ -106,7 +107,10 @@ def _generate_article(db: Session, gen: Generation, model: str) -> str:
     messages, max_tokens = build_generation_messages(
         db, gen, brand=brand, context=context
     )
-    return _run(chat_completion(messages=messages, model=model, max_tokens=max_tokens))
+    content, _resp = _run(
+        chat_completion(messages=messages, model=model, max_tokens=max_tokens)
+    )
+    return content
 
 
 def _new_article_generation(

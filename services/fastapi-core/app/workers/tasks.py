@@ -28,6 +28,7 @@ from app.core.litellm_client import chat_completion, embed
 from app.core.minio_client import get_object_bytes, promote_to_assets
 from app.core.qdrant import upsert_asset_embedding
 from app.core.article_grounding import ground_article
+from app.core.credits import grant_credits_sync, real_generation_cost_cents
 from app.core.generation_messages import build_generation_messages
 from app.models.analytics import RevenueEvent, RevenueEventType
 from app.models.asset import Asset, AssetStatus
@@ -38,6 +39,7 @@ from app.models.analytics_connector import (
 )
 from app.models.brand import Brand, BrandStatus
 from app.models.generation import Generation, GenerationStatus
+from app.models.tenant import Tenant
 
 log = logging.getLogger("worker")
 
@@ -204,8 +206,9 @@ def run_generation(self, generation_id: str) -> str:
             db, gen, brand=brand, context=context
         )
         model = (gen.metadata_json or {}).get("model") or settings.DEFAULT_LLM_MODEL
+        hold_cents = meta.get("credit_hold_cents")
         try:
-            content = _run(
+            content, raw_response = _run(
                 chat_completion(messages=messages, model=model, max_tokens=max_tokens)
             )
             gen.result = content
@@ -215,7 +218,32 @@ def run_generation(self, generation_id: str) -> str:
             gen.status = GenerationStatus.FAILED
             gen.error_message = f"{e.__class__.__name__}: {e}"[:500]
             db.commit()
+            # Refund the full hold — no charge for a failed generation. This
+            # task retries (max_retries=2): only refund once self.retry()
+            # itself gives up (raises the original exception rather than a
+            # Retry that Celery will re-drive), otherwise each retry attempt
+            # would refund the same hold again while the row is still queued
+            # to try the LLM call once more.
+            is_final_attempt = self.request.retries >= self.max_retries
+            if hold_cents and is_final_attempt:
+                grant_credits_sync(
+                    db, tenant_id=gen.tenant_id, amount_cents=hold_cents
+                )
             raise self.retry(exc=e)
+
+        # Settle the hold to the real cost. Only ever refunds the
+        # difference (real cost is bounded by the same max_tokens the hold
+        # was computed from) — never charges more than what was held.
+        if hold_cents:
+            try:
+                real_cents = real_generation_cost_cents(raw_response)
+            except Exception:
+                real_cents = hold_cents  # pricing lookup failed — no refund, not a loss
+            refund_cents = max(0, hold_cents - real_cents)
+            if refund_cents:
+                grant_credits_sync(
+                    db, tenant_id=gen.tenant_id, amount_cents=refund_cents
+                )
 
     notify_email.delay(generation_id, "complete")
     return "ok"
@@ -562,7 +590,7 @@ def build_brand_profile(self, brand_id: str) -> str:
             f"Website text:\n{site.get('text', '')}"
         )
         try:
-            raw = _run(
+            raw, _resp = _run(
                 chat_completion(
                     messages=[
                         {"role": "system", "content": _BRAND_SYSTEM},
