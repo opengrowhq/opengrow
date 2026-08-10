@@ -1,4 +1,4 @@
-import { API_BASE, apiGet, parse } from "@/lib/http";
+import { API_BASE, apiGet, apiSend, parse } from "@/lib/http";
 
 export type Me = {
   id: string;
@@ -21,4 +21,17 @@ export async function login(email: string, password: string): Promise<string> {
 
 export function fetchMe(): Promise<Me> {
   return apiGet<Me>("/auth/me");
+}
+
+export type SignupInput = {
+  email: string;
+  password: string;
+  display_name: string;
+  tenant_name: string;
+};
+
+// Hosted-only — this endpoint doesn't exist in lite mode (no self-hosted
+// self-service signup); a lite deployment 404s on this call.
+export function signup(input: SignupInput): Promise<{ access_token: string }> {
+  return apiSend<{ access_token: string }>("/auth/signup", "POST", input);
 }
