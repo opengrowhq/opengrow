@@ -1,4 +1,4 @@
-from sqlalchemy import String, Boolean
+from sqlalchemy import String, Boolean, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -18,4 +18,12 @@ class Tenant(IdMixin, TimestampMixin, Base):
     )
     billing_plan: Mapped[str] = mapped_column(
         String(20), nullable=False, default="free"
+    )
+    # Prepaid, non-expiring usage credits (cents). Only ever increases (plan
+    # grants on billing-period renewal, purchased top-ups) or decreases
+    # (metered usage). Never resets to zero, never expires — deliberate:
+    # "hard-stop errors on exhausted credits instead of silent overage
+    # billing" is a documented product decision, not a missing feature.
+    credit_balance_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
     )
