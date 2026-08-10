@@ -101,6 +101,13 @@ class Settings(BaseSettings):
     GOOGLE_OAUTH_CLIENT_SECRET: str = ""
     GOOGLE_OAUTH_REDIRECT_URI: str = ""
 
+    # ---- Stripe billing (hosted only — Pro/Team paid tiers, managed LLM key) ----
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_PUBLISHABLE_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PRICE_ID_PRO: str = ""
+    STRIPE_PRICE_ID_TEAM: str = ""
+
     @property
     def is_lite(self) -> bool:
         return self.DEPLOYMENT_MODE == "lite"
