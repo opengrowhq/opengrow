@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -98,11 +98,29 @@ async def create_checkout(
     tenant = await db.get(Tenant, current.tenant_id)
     customer_id = await _get_or_create_stripe_customer(db, client, tenant, current)
 
+    line_items = [{"price": price_id, "quantity": 1}]
+    if payload.plan == "team":
+        # A tenant may already have more members than the plan's included
+        # seat count (invited teammates while on Free/Pro, or downgraded
+        # and re-upgraded) — start the seat line item at the real quantity
+        # from the first Checkout session rather than creating it a moment
+        # later via sync_seat_quantity's subscription_items.create path.
+        member_count = await db.scalar(
+            select(func.count(User.id)).where(
+                User.tenant_id == tenant.id, User.is_active.is_(True)
+            )
+        )
+        extra_seats = max(0, (member_count or 0) - settings.TEAM_INCLUDED_SEATS)
+        if extra_seats > 0:
+            line_items.append(
+                {"price": settings.STRIPE_PRICE_ID_TEAM_SEAT, "quantity": extra_seats}
+            )
+
     session = client.v1.checkout.sessions.create(
         params={
             "mode": "subscription",
             "customer": customer_id,
-            "line_items": [{"price": price_id, "quantity": 1}],
+            "line_items": line_items,
             "success_url": f"{settings.FRONTEND_BASE_URL}/settings/billing?checkout=success",
             "cancel_url": f"{settings.FRONTEND_BASE_URL}/settings/billing?checkout=cancelled",
             "metadata": {"opengrow_tenant_id": str(tenant.id), "opengrow_plan": payload.plan},
@@ -286,14 +304,31 @@ async def _handle_checkout_completed(db: AsyncSession, session: dict) -> None:
     await db.commit()
 
 
+def _find_item(sub: dict, price_id: str) -> dict | None:
+    for item in sub["items"]["data"]:
+        if item["price"]["id"] == price_id:
+            return item
+    return None
+
+
 async def _upsert_subscription(db: AsyncSession, sub: dict) -> None:
     tenant = await _tenant_by_stripe_customer(db, sub["customer"])
     if tenant is None:
         return
     status_value = _STRIPE_STATUS_MAP.get(sub["status"], SubscriptionStatus.INCOMPLETE)
-    item = sub["items"]["data"][0]
+
+    # A Team subscription carries two line items (base + seat overage); a
+    # Pro subscription carries one. Find the BASE plan item specifically
+    # rather than assuming items.data[0] — Stripe doesn't guarantee item
+    # order, and blindly taking index 0 would misread a Team subscription
+    # whose seat item happened to sort first.
+    team_item = _find_item(sub, settings.STRIPE_PRICE_ID_TEAM)
+    pro_item = _find_item(sub, settings.STRIPE_PRICE_ID_PRO)
+    item = team_item or pro_item or sub["items"]["data"][0]
     price_id = item["price"]["id"]
-    plan = "team" if price_id == settings.STRIPE_PRICE_ID_TEAM else "pro"
+    plan = "team" if team_item else "pro"
+
+    seat_item = _find_item(sub, settings.STRIPE_PRICE_ID_TEAM_SEAT)
 
     existing = await db.scalar(
         select(Subscription).where(
@@ -314,6 +349,9 @@ async def _upsert_subscription(db: AsyncSession, sub: dict) -> None:
         existing.current_period_start = period_start
         existing.current_period_end = period_end
         existing.cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
+        if seat_item:
+            existing.stripe_seat_item_id = seat_item["id"]
+            existing.extra_seats = seat_item["quantity"]
     else:
         db.add(
             Subscription(
@@ -326,6 +364,8 @@ async def _upsert_subscription(db: AsyncSession, sub: dict) -> None:
                 current_period_start=period_start,
                 current_period_end=period_end,
                 cancel_at_period_end=bool(sub.get("cancel_at_period_end")),
+                stripe_seat_item_id=seat_item["id"] if seat_item else None,
+                extra_seats=seat_item["quantity"] if seat_item else 0,
             )
         )
     tenant.billing_plan = plan if status_value == SubscriptionStatus.ACTIVE else tenant.billing_plan
@@ -351,4 +391,56 @@ async def _handle_subscription_deleted(db: AsyncSession, sub: dict) -> None:
     if existing:
         existing.status = SubscriptionStatus.CANCELED
     tenant.billing_plan = "free"
+    await db.commit()
+
+
+async def sync_seat_quantity(db: AsyncSession, tenant_id, member_count: int) -> None:
+    """Push the tenant's real member count to Stripe as the seat-overage
+    line item's quantity. Called after a Team tenant's membership changes
+    (invite accepted, member removed) — not on every read, so billing
+    reflects actual headcount without polling Stripe.
+
+    A no-op for tenants with no active Team subscription (free/Pro tenants,
+    or a Team tenant that hasn't completed Checkout yet) — there is nothing
+    in Stripe to update yet, and the first Checkout session will establish
+    the seat item at the current quantity via the initial line item.
+    """
+    if not settings.STRIPE_SECRET_KEY:
+        return  # billing not configured (e.g. local lite/dev) — nothing to sync
+
+    sub = await db.scalar(
+        select(Subscription).where(
+            Subscription.tenant_id == tenant_id,
+            Subscription.plan == "team",
+            Subscription.status == SubscriptionStatus.ACTIVE,
+            Subscription.is_deleted.is_(False),
+        )
+    )
+    if sub is None:
+        return
+
+    extra_seats = max(0, member_count - settings.TEAM_INCLUDED_SEATS)
+    if extra_seats == sub.extra_seats:
+        return  # already in sync — avoid a needless Stripe call
+
+    client = _client()
+    if sub.stripe_seat_item_id:
+        if extra_seats == 0:
+            client.v1.subscription_items.delete(sub.stripe_seat_item_id)
+            sub.stripe_seat_item_id = None
+        else:
+            client.v1.subscription_items.update(
+                sub.stripe_seat_item_id, params={"quantity": extra_seats}
+            )
+    elif extra_seats > 0:
+        item = client.v1.subscription_items.create(
+            params={
+                "subscription": sub.stripe_subscription_id,
+                "price": settings.STRIPE_PRICE_ID_TEAM_SEAT,
+                "quantity": extra_seats,
+            }
+        )
+        sub.stripe_seat_item_id = item.id
+
+    sub.extra_seats = extra_seats
     await db.commit()

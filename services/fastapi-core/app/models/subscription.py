@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum as SAEnum, String
+from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -44,3 +44,10 @@ class Subscription(TenantMixin, Base):
     cancel_at_period_end: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+    # The seat-overage line item's Stripe subscription-item id (distinct
+    # from `stripe_subscription_id`, which is the base plan's item on this
+    # same subscription) — None until a Team tenant actually has more
+    # members than settings.TEAM_INCLUDED_SEATS. Needed to update the
+    # existing item's quantity rather than creating a duplicate each time.
+    stripe_seat_item_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    extra_seats: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
