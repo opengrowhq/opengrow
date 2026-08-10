@@ -1,29 +1,34 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { motion } from "motion/react";
-import { resolvePostAuthPath } from "@/lib/app-routes.mjs";
+import { appRootPath } from "@/lib/app-routes.mjs";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { BrandMark, GradientMesh, SparkIcon } from "@/components/illustrations";
 import { EASE } from "@/components/motion";
-import { useLogin } from "../hooks";
+import { useSignup } from "../hooks";
 
-export function LoginForm() {
+export function SignupForm() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const next = searchParams.get("next");
-  const login = useLogin();
-  const [email, setEmail] = useState("demo@opengrow.dev");
+  const signup = useSignup();
+  const [tenantName, setTenantName] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    login.mutate(
-      { email, password },
+    signup.mutate(
       {
-        onSuccess: (me) => router.push(resolvePostAuthPath(next, me.tenant_slug)),
+        tenant_name: tenantName,
+        display_name: displayName,
+        email,
+        password,
+      },
+      {
+        onSuccess: (me) => router.push(appRootPath(me.tenant_slug)),
       },
     );
   }
@@ -44,14 +49,31 @@ export function LoginForm() {
             <span className="text-xl font-black tracking-tight">OpenGrow</span>
           </div>
 
-          <h1 className="text-3xl font-black tracking-tight">
-            {next ? "You're all set 🎉" : "Welcome back"}
-          </h1>
+          <h1 className="text-3xl font-black tracking-tight">Create your workspace</h1>
           <p className="mt-2 text-sm font-medium text-gray-500">
-            {next ? "Sign in to finish setting up your brand." : "Sign in to your workspace."}
+            Free to start — upgrade to Pro or Team whenever you're ready.
           </p>
 
           <div className="mt-8 space-y-4">
+            <Field label="Workspace name">
+              <Input
+                type="text"
+                value={tenantName}
+                onChange={(e) => setTenantName(e.target.value)}
+                required
+                autoComplete="organization"
+                placeholder="Acme Inc"
+              />
+            </Field>
+            <Field label="Your name">
+              <Input
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                required
+                autoComplete="name"
+              />
+            </Field>
             <Field label="Email">
               <Input
                 type="email"
@@ -67,28 +89,29 @@ export function LoginForm() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                autoComplete="current-password"
+                minLength={8}
+                autoComplete="new-password"
               />
             </Field>
 
-            {login.isError && (
+            {signup.isError && (
               <motion.p
                 initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="rounded-xl bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-600"
               >
-                {login.error instanceof Error ? login.error.message : "Login failed"}
+                {signup.error instanceof Error ? signup.error.message : "Signup failed"}
               </motion.p>
             )}
 
-            <Button type="submit" size="lg" loading={login.isPending} className="w-full">
-              {login.isPending ? "Signing in…" : "Sign in"}
+            <Button type="submit" size="lg" loading={signup.isPending} className="w-full">
+              {signup.isPending ? "Creating workspace…" : "Create workspace"}
             </Button>
 
             <p className="text-center text-sm font-medium text-gray-500">
-              New to OpenGrow?{" "}
-              <a href="/signup" className="font-bold text-og-green-700 hover:underline">
-                Create a workspace
+              Already have a workspace?{" "}
+              <a href="/login" className="font-bold text-og-green-700 hover:underline">
+                Sign in
               </a>
             </p>
           </div>
