@@ -107,6 +107,8 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRICE_ID_PRO: str = ""
     STRIPE_PRICE_ID_TEAM: str = ""
+    # Base URL the browser is served from — Checkout/Billing Portal redirect here.
+    FRONTEND_BASE_URL: str = "http://localhost:3000"
 
     @property
     def is_lite(self) -> bool:
