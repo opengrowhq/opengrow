@@ -66,7 +66,9 @@ async def test_paid_tenant_with_credits_can_generate(
         .where(Tenant.id == acct["tenant"].id)
         .execution_options(populate_existing=True)
     )
-    assert row.scalar_one().credit_balance_cents == 95  # 100 - GENERATION_COST_CENTS
+    # Real-usage-based hold, not a flat fee — some small positive amount was
+    # debited (exact cents depend on the configured default model's price).
+    assert 0 < row.scalar_one().credit_balance_cents < 100
 
 
 async def test_paid_tenant_without_credits_gets_402(
@@ -97,7 +99,7 @@ async def test_insufficient_credit_generation_is_never_created(
     acct = await tenant_factory()
     tenant = await db.get(Tenant, acct["tenant"].id)
     tenant.billing_plan = "team"
-    tenant.credit_balance_cents = 2  # less than GENERATION_COST_CENTS (5)
+    tenant.credit_balance_cents = 0  # cannot cover any real-usage hold
     await db.commit()
 
     resp = await client.post(

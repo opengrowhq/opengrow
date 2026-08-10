@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.auth import get_current_user
 from app.core.authz import authz_client
-from app.core.credits import GENERATION_COST_CENTS, debit_credits
+from app.core.credits import debit_credits, estimate_generation_cost_cents
+from app.core.generation_messages import build_generation_messages
 from app.core.usage import record_usage
 from app.database import get_db
 from app.models.asset import Asset, AssetStatus
@@ -37,14 +38,7 @@ async def create_generation(
             "Not permitted to create generations for this tenant",
         )
 
-    # Paid tiers draw from a prepaid credit balance (hard stop when
-    # exhausted, never a silent overage charge). Free tier is metered but
-    # not credit-gated here — its own volume limit is enforced separately.
     tenant = await db.get(Tenant, current.tenant_id)
-    if tenant and tenant.billing_plan in ("pro", "team"):
-        await debit_credits(
-            db, tenant_id=current.tenant_id, cost_cents=GENERATION_COST_CENTS
-        )
 
     ref_id = None
     if payload.reference_asset_id:
@@ -119,6 +113,7 @@ async def create_generation(
                 f"Invalid article brief: {e.errors()[0]['msg']}",
             ) from e
 
+    model = payload.model or settings.DEFAULT_LLM_MODEL
     gen = Generation(
         tenant_id=current.tenant_id,
         owner_id=current.id,
@@ -126,11 +121,25 @@ async def create_generation(
         reference_asset_id=ref_id,
         parent_generation_id=parent_id,
         status=GenerationStatus.QUEUED,
-        metadata_json={
-            **meta,
-            "model": payload.model or settings.DEFAULT_LLM_MODEL,
-        },
+        metadata_json={**meta, "model": model},
     )
+
+    # Paid tiers draw from a prepaid credit balance. This holds a worst-case
+    # estimate (real per-model price × the generation's max_tokens cap) as
+    # a hard stop BEFORE the LLM call — never a silent overage charge, and
+    # never after-the-fact billing (which would let an empty-balance tenant
+    # keep triggering real-money API calls with nothing to collect against).
+    # run_generation settles this to the real cost once the call completes.
+    # Free tier is metered but not credit-gated — its own volume limit is a
+    # separate, already-existing mechanism.
+    if tenant and tenant.billing_plan in ("pro", "team"):
+        messages, max_tokens = build_generation_messages(db, gen)
+        hold_cents = estimate_generation_cost_cents(
+            model=model, messages=messages, max_tokens=max_tokens
+        )
+        await debit_credits(db, tenant_id=current.tenant_id, cost_cents=hold_cents)
+        gen.metadata_json = {**gen.metadata_json, "credit_hold_cents": hold_cents}
+
     db.add(gen)
     await db.commit()
     await db.refresh(gen)
