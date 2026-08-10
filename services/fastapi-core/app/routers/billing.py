@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.auth import get_current_user
 from app.core.authz import authz_client
+from app.core.credits import PLAN_MONTHLY_GRANT_CENTS, grant_credits
 from app.database import get_db
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.stripe_webhook_event import StripeWebhookEvent
@@ -227,6 +228,11 @@ async def _upsert_subscription(db: AsyncSession, sub: dict) -> None:
     )
     period_start = datetime.fromtimestamp(item["current_period_start"], tz=timezone.utc)
     period_end = datetime.fromtimestamp(item["current_period_end"], tz=timezone.utc)
+    # A new billing period has begun if this is the first time we're seeing
+    # the subscription, or the period start advanced past what we had on
+    # file — either way, the plan's monthly credit grant is due.
+    is_new_period = existing is None or existing.current_period_start != period_start
+
     if existing:
         existing.stripe_price_id = price_id
         existing.plan = plan
@@ -250,6 +256,11 @@ async def _upsert_subscription(db: AsyncSession, sub: dict) -> None:
         )
     tenant.billing_plan = plan if status_value == SubscriptionStatus.ACTIVE else tenant.billing_plan
     await db.commit()
+
+    if is_new_period and status_value == SubscriptionStatus.ACTIVE:
+        grant_cents = PLAN_MONTHLY_GRANT_CENTS.get(plan)
+        if grant_cents:
+            await grant_credits(db, tenant_id=tenant.id, amount_cents=grant_cents)
 
 
 async def _handle_subscription_updated(db: AsyncSession, sub: dict) -> None:

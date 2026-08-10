@@ -96,13 +96,17 @@ async def test_webhook_rejects_bad_signature(client, monkeypatch):
     assert resp.status_code == 400
 
 
-def _fake_subscription_event(tenant_id: str, event_id: str = "evt_sub_1") -> dict:
+def _fake_subscription_event(
+    tenant_id: str,
+    event_id: str = "evt_sub_1",
+    subscription_id: str = "sub_test_1",
+) -> dict:
     return {
         "id": event_id,
         "type": "customer.subscription.updated",
         "data": {
             "object": {
-                "id": "sub_test_1",
+                "id": subscription_id,
                 "customer": "cus_test_1",
                 "status": "active",
                 "cancel_at_period_end": False,
@@ -176,6 +180,72 @@ async def test_webhook_subscription_updated_persists_and_activates_plan(
     )
     refreshed = row.scalar_one()
     assert refreshed.billing_plan == "pro"
+    # First time we see this subscription's period → Pro's monthly grant
+    # (1,000 generations * 5c) is credited.
+    assert refreshed.credit_balance_cents == 5000
+
+
+async def test_webhook_does_not_grant_credits_twice_for_the_same_period(
+    client, tenant_factory, monkeypatch, db
+):
+    from app import config
+    import stripe
+    from sqlalchemy import select
+    from app.models.tenant import Tenant
+
+    class _FakeStripeEvent(dict):
+        def to_dict_recursive(self):
+            return dict(self)
+
+    acct = await tenant_factory()
+    tenant_id = str(acct["tenant"].id)
+    tenant = await db.get(Tenant, acct["tenant"].id)
+    tenant.stripe_customer_id = "cus_test_2"
+    await db.commit()
+
+    monkeypatch.setattr(config.settings, "STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(config.settings, "STRIPE_PRICE_ID_PRO", "price_pro_test")
+
+    first_event = _fake_subscription_event(
+        tenant_id, event_id="evt_a", subscription_id="sub_test_period_2"
+    )
+    first_event["data"]["object"]["customer"] = "cus_test_2"
+    monkeypatch.setattr(
+        stripe.Webhook,
+        "construct_event",
+        lambda body, sig, secret: _FakeStripeEvent(first_event),
+    )
+    await client.post(
+        "/billing/webhook",
+        content=b"{}",
+        headers={"stripe-signature": "t=1,v1=whatever"},
+    )
+
+    # A second event for the SAME subscription id and SAME period (e.g. an
+    # unrelated field update, or a duplicate delivery under a different
+    # Stripe event id) must not grant credits again.
+    second_event = _fake_subscription_event(
+        tenant_id, event_id="evt_b", subscription_id="sub_test_period_2"
+    )
+    second_event["data"]["object"]["customer"] = "cus_test_2"
+    monkeypatch.setattr(
+        stripe.Webhook,
+        "construct_event",
+        lambda body, sig, secret: _FakeStripeEvent(second_event),
+    )
+    resp = await client.post(
+        "/billing/webhook",
+        content=b"{}",
+        headers={"stripe-signature": "t=1,v1=whatever"},
+    )
+    assert resp.status_code == 200
+
+    row = await db.execute(
+        select(Tenant)
+        .where(Tenant.id == acct["tenant"].id)
+        .execution_options(populate_existing=True)
+    )
+    assert row.scalar_one().credit_balance_cents == 5000  # not 10000
 
     # Re-delivering the same event must be a no-op (idempotency).
     resp2 = await client.post(

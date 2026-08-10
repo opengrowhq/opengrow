@@ -8,10 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.auth import get_current_user
 from app.core.authz import authz_client
+from app.core.credits import GENERATION_COST_CENTS, debit_credits
 from app.core.usage import record_usage
 from app.database import get_db
 from app.models.asset import Asset, AssetStatus
 from app.models.generation import Generation, GenerationStatus
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.article import ArticleBrief
 from app.schemas.generation import GenerationCreate, GenerationOut
@@ -33,6 +35,15 @@ async def create_generation(
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "Not permitted to create generations for this tenant",
+        )
+
+    # Paid tiers draw from a prepaid credit balance (hard stop when
+    # exhausted, never a silent overage charge). Free tier is metered but
+    # not credit-gated here — its own volume limit is enforced separately.
+    tenant = await db.get(Tenant, current.tenant_id)
+    if tenant and tenant.billing_plan in ("pro", "team"):
+        await debit_credits(
+            db, tenant_id=current.tenant_id, cost_cents=GENERATION_COST_CENTS
         )
 
     ref_id = None
