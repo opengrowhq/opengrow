@@ -207,8 +207,19 @@ async def test_resume_rejects_non_failed_run(client, tenant_factory, no_celery):
 # ---- Pipeline logic (sync, LLM monkeypatched) -----------------------------
 
 
-def _seed_run(sync_db, brief="Write a launch post"):
-    tenant = Tenant(id=uuid4(), slug=f"orch-{uuid4().hex[:8]}", name="Orch")
+def _seed_run(
+    sync_db,
+    brief="Write a launch post",
+    billing_plan="free",
+    credit_balance_cents=0,
+):
+    tenant = Tenant(
+        id=uuid4(),
+        slug=f"orch-{uuid4().hex[:8]}",
+        name="Orch",
+        billing_plan=billing_plan,
+        credit_balance_cents=credit_balance_cents,
+    )
     sync_db.add(tenant)
     sync_db.commit()
     user = User(
@@ -234,7 +245,9 @@ def _seed_run(sync_db, brief="Write a launch post"):
 
 def test_execute_run_generates_and_promotes(sync_db, monkeypatch):
     monkeypatch.setattr(
-        orchestrator, "_generate_text", lambda brief, model: "generated body copy"
+        orchestrator,
+        "_generate_text",
+        lambda db, gen, brief, model: "generated body copy",
     )
     run = _seed_run(sync_db)
 
@@ -261,7 +274,9 @@ def test_execute_run_auto_publishes_when_configured(sync_db, monkeypatch):
     from app.models.content_piece import ContentStatus
     from app.models.publication import Publication
 
-    monkeypatch.setattr(orchestrator, "_generate_text", lambda brief, model: "body")
+    monkeypatch.setattr(
+        orchestrator, "_generate_text", lambda db, gen, brief, model: "body"
+    )
     published = {}
 
     def fake_publish(channel, title, body, config):
@@ -288,7 +303,7 @@ def test_execute_run_auto_publishes_when_configured(sync_db, monkeypatch):
 
 
 def test_execute_run_marks_failed_on_llm_error(sync_db, monkeypatch):
-    def boom(brief, model):
+    def boom(db, gen, brief, model):
         raise RuntimeError("llm down")
 
     monkeypatch.setattr(orchestrator, "_generate_text", boom)
@@ -305,8 +320,20 @@ def test_execute_run_marks_failed_on_llm_error(sync_db, monkeypatch):
 # ---- Article pipeline (design C): pause, resume, guarded publish ----------
 
 
-def _seed_article_run(sync_db, pause=True, auto_approve=False, publish_channel=None):
-    run = _seed_run(sync_db, brief="Article about compounding")
+def _seed_article_run(
+    sync_db,
+    pause=True,
+    auto_approve=False,
+    publish_channel=None,
+    billing_plan="free",
+    credit_balance_cents=0,
+):
+    run = _seed_run(
+        sync_db,
+        brief="Article about compounding",
+        billing_plan=billing_plan,
+        credit_balance_cents=credit_balance_cents,
+    )
     run.details = {
         "article": {
             "topic": "Compounding",
@@ -467,3 +494,170 @@ def test_article_failed_run_resumes_at_the_failing_step(sync_db, monkeypatch):
     gens = _generations(sync_db, run)
     assert len(gens) == 2
     assert calls == ["article_outline", "article_draft"]
+
+
+# ---- Credit gating: orchestrator-driven generations must be billed, same
+# as app.routers.generations.create_generation (see feature/orchestrator-
+# credit-gating) --------------------------------------------------------
+
+
+def test_legacy_run_holds_and_settles_credits_on_pro_tenant(sync_db, monkeypatch):
+    from app.models.generation import Generation
+
+    async def _fake_chat_completion(**kwargs):
+        return "generated body copy", {
+            "model": "gpt-4o-mini",
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 50,
+                "total_tokens": 100,
+            },
+            "choices": [],
+        }
+
+    monkeypatch.setattr(orchestrator, "chat_completion", _fake_chat_completion)
+    run = _seed_run(sync_db, billing_plan="pro", credit_balance_cents=100)
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    tenant = sync_db.get(Tenant, run.tenant_id)
+    # Held some positive amount up front, then the tiny fake completion's
+    # real cost rounds to ~0c, so nearly the full hold is refunded back.
+    assert 0 < tenant.credit_balance_cents <= 100
+
+    gen = sync_db.get(Generation, run.generation_id)
+    assert gen.status == GenerationStatus.COMPLETE
+    # The hold marker is cleared once settled (idempotent re-entry guard).
+    assert "credit_hold_cents" not in (gen.metadata_json or {})
+
+
+def test_legacy_run_refunds_full_hold_on_llm_failure(sync_db, monkeypatch):
+    from app.models.generation import Generation
+
+    async def _failing_chat_completion(**kwargs):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(orchestrator, "chat_completion", _failing_chat_completion)
+    run = _seed_run(sync_db, billing_plan="pro", credit_balance_cents=100)
+
+    with pytest.raises(RuntimeError):
+        orchestrator.execute_run(sync_db, run.id)
+
+    sync_db.refresh(run)
+    tenant = sync_db.get(Tenant, run.tenant_id)
+    assert tenant.credit_balance_cents == 100  # fully refunded, nothing charged
+
+    gen = sync_db.get(Generation, run.generation_id)
+    assert gen.status == GenerationStatus.FAILED
+    assert "credit_hold_cents" not in (gen.metadata_json or {})
+
+
+def test_legacy_run_free_tenant_is_not_credit_gated(sync_db, monkeypatch):
+    monkeypatch.setattr(
+        orchestrator, "_generate_text", lambda db, gen, brief, model: "body"
+    )
+    run = _seed_run(sync_db, billing_plan="free", credit_balance_cents=0)
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    tenant = sync_db.get(Tenant, run.tenant_id)
+    assert tenant.credit_balance_cents == 0  # never touched
+
+
+def _fake_chat_completion_for_article(fail_on_model_call=None):
+    calls = {"n": 0}
+
+    async def _fake(**kwargs):
+        calls["n"] += 1
+        if fail_on_model_call == calls["n"]:
+            raise RuntimeError(f"llm down on call {calls['n']}")
+        # First call is the outline, second is the draft — same shape works
+        # for both since only build_generation_messages' prompt differs.
+        text = (
+            "## Intro\n- hook\n\n## Body\n- point" if calls["n"] == 1 else "# Draft body"
+        )
+        return text, {
+            "model": "gpt-4o-mini",
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 50,
+                "total_tokens": 100,
+            },
+            "choices": [],
+        }
+
+    return _fake, calls
+
+
+def test_article_run_holds_and_settles_credits_on_pro_tenant(sync_db, monkeypatch):
+    fake, _ = _fake_chat_completion_for_article()
+    monkeypatch.setattr(orchestrator, "chat_completion", fake)
+    run = _seed_article_run(
+        sync_db, pause=False, billing_plan="pro", credit_balance_cents=100
+    )
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    tenant = sync_db.get(Tenant, run.tenant_id)
+    # Two generations (outline + draft) were each held then settled — some
+    # credits were spent and some refunded, balance stays below the start.
+    assert 0 < tenant.credit_balance_cents <= 100
+
+    gens = _generations(sync_db, run)
+    assert len(gens) == 2
+    for g in gens:
+        assert "credit_hold_cents" not in (g.metadata_json or {})
+
+
+def test_article_run_retry_after_failure_holds_its_own_credits_not_free_or_doubled(
+    sync_db, monkeypatch
+):
+    """Regression test for the bug this branch fixes: a failed generation's
+    hold must be refunded exactly once (not once per retry attempt, like the
+    Celery-level bug fixed in app.workers.tasks.run_generation), AND a
+    retried attempt on the same row must get its own fresh hold rather than
+    running unbilled just because the first hold was already refunded."""
+    from app.models.generation import Generation
+
+    fake, calls = _fake_chat_completion_for_article(fail_on_model_call=2)
+    monkeypatch.setattr(orchestrator, "chat_completion", fake)
+    run = _seed_article_run(
+        sync_db, pause=False, billing_plan="pro", credit_balance_cents=100
+    )
+
+    with pytest.raises(RuntimeError):
+        orchestrator.execute_run(sync_db, run.id)
+
+    sync_db.refresh(run)
+    tenant = sync_db.get(Tenant, run.tenant_id)
+    gens = _generations(sync_db, run)
+    assert len(gens) == 2  # outline settled, draft created+failed
+    outline_gen, draft_gen = gens
+    assert outline_gen.status == GenerationStatus.COMPLETE
+    assert draft_gen.status == GenerationStatus.FAILED
+    # Outline was held+settled (refunded to ~0 real cost); draft's hold was
+    # refunded in full on failure — balance should be back near the start,
+    # not below it (no uncollected charge) and not above it (no over-refund).
+    assert 0 < tenant.credit_balance_cents <= 100
+    balance_after_failure = tenant.credit_balance_cents
+
+    # Re-enter (simulates a Celery retry of run_orchestrator): the draft
+    # generation is retried on the SAME row.
+    fake2, _ = _fake_chat_completion_for_article()
+    monkeypatch.setattr(orchestrator, "chat_completion", fake2)
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    sync_db.refresh(tenant)
+    assert run.status == OrchestratorRunStatus.COMPLETE
+    gens_after = _generations(sync_db, run)
+    assert len(gens_after) == 2  # still the same two rows, no duplicate outline
+    assert gens_after[1].id == draft_gen.id
+    assert gens_after[1].status == GenerationStatus.COMPLETE
+    # The retry's own hold was debited and then settled — balance moved
+    # (not identical to balance_after_failure, proving the retry was
+    # actually billed, not a free ride), and never went negative/wrong.
+    assert 0 < tenant.credit_balance_cents <= balance_after_failure
