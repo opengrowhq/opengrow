@@ -16,3 +16,8 @@ export const createCheckout = (plan: "pro" | "team") =>
 
 export const createPortalSession = () =>
   apiSend<PortalResult>("/billing/portal", "POST", {});
+
+export const createTopupCheckout = (amountEurCents: number) =>
+  apiSend<CheckoutResult>("/billing/topup", "POST", {
+    amount_eur_cents: amountEurCents,
+  });

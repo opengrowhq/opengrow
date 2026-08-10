@@ -16,6 +16,10 @@ class CheckoutOut(BaseModel):
     checkout_url: str
 
 
+class TopupRequest(BaseModel):
+    amount_eur_cents: int  # must be one of app.core.credits.TOPUP_TIERS_EUR_CENTS
+
+
 class PortalOut(BaseModel):
     portal_url: str
 

@@ -33,6 +33,21 @@ PLAN_MONTHLY_GRANT_CENTS = {
     "team": 5_000 * 5,
 }
 
+# Purchased credit top-ups (EUR, matching Stripe account currency). The
+# monthly plan grant above already runs near-100% margin against real LLM
+# cost for a typical tenant (measured ~0.2c/generation on gpt-4o-mini) — a
+# tenant buying a top-up has, by definition, already burned through that
+# generous included allowance, so top-ups carry their own 25% margin rather
+# than passing the purchase through at cost. Fixed tiers (not a free-form
+# amount) to keep the Checkout flow and abuse surface simple.
+TOPUP_TIERS_EUR_CENTS = [1_000, 2_500, 5_000]  # €10 / €25 / €50
+TOPUP_MARKUP = 0.25  # 25% — €1 paid buys 80 credit-cents, not 100
+
+
+def topup_credit_cents(amount_eur_cents: int) -> int:
+    """Credit granted for a top-up of `amount_eur_cents` actually paid."""
+    return round(amount_eur_cents * (1 - TOPUP_MARKUP))
+
 
 class InsufficientCreditsError(HTTPException):
     def __init__(self, cost_cents: int, balance_cents: int):

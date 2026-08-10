@@ -4,8 +4,10 @@ import pytest
 
 from app.core.credits import (
     PLAN_MONTHLY_GRANT_CENTS,
+    TOPUP_TIERS_EUR_CENTS,
     estimate_generation_cost_cents,
     real_generation_cost_cents,
+    topup_credit_cents,
 )
 
 _MESSAGES = [
@@ -20,6 +22,18 @@ def test_plan_monthly_grants_match_documented_included_generations():
     # billing is real-usage-based, not this flat rate.
     assert PLAN_MONTHLY_GRANT_CENTS["pro"] == 1_000 * 5
     assert PLAN_MONTHLY_GRANT_CENTS["team"] == 5_000 * 5
+
+
+def test_topup_applies_the_documented_25_percent_markup():
+    # €10 (1000c) paid → 750c granted (75% pass-through, 25% margin).
+    assert topup_credit_cents(1_000) == 750
+    # €50 (5000c) paid → 3750c granted.
+    assert topup_credit_cents(5_000) == 3_750
+
+
+def test_topup_tiers_are_all_positive_euro_amounts():
+    assert TOPUP_TIERS_EUR_CENTS == sorted(TOPUP_TIERS_EUR_CENTS)
+    assert all(c > 0 for c in TOPUP_TIERS_EUR_CENTS)
 
 
 def test_estimate_uses_real_per_model_pricing_not_a_flat_rate():
