@@ -17,6 +17,7 @@ from app.routers import (
     assets,
     audit,
     auth,
+    billing,
     brands,
     content,
     generations,
@@ -103,6 +104,7 @@ app.include_router(brands.router, prefix="/brands", tags=["brands"])
 app.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 app.include_router(api_keys.router, prefix="/api-keys", tags=["api-keys"])
 app.include_router(usage.router, prefix="/usage", tags=["usage"])
+app.include_router(billing.router, prefix="/billing", tags=["billing"])
 app.include_router(mcp.router, prefix="/mcp", tags=["mcp"])
 app.include_router(orchestrator.router, prefix="/orchestrator", tags=["orchestrator"])
 app.include_router(audit.router, prefix="/audit", tags=["audit"])
