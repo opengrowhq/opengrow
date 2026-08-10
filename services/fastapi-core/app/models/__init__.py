@@ -20,3 +20,4 @@ from app.models.github_credential import GitHubCredential  # noqa: F401
 from app.models.audit import AuditLog  # noqa: F401
 from app.models.subscription import Subscription, SubscriptionStatus  # noqa: F401
 from app.models.stripe_webhook_event import StripeWebhookEvent  # noqa: F401
+from app.models.invite import Invite, InviteStatus, generate_invite_token  # noqa: F401
