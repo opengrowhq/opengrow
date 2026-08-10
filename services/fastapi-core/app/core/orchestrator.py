@@ -22,6 +22,12 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core.article_grounding import ground_article
 from app.core.article_metadata import article_content_metadata
+from app.core.credits import (
+    debit_credits_sync,
+    estimate_generation_cost_cents,
+    grant_credits_sync,
+    real_generation_cost_cents,
+)
 from app.core.generation_messages import build_generation_messages
 from app.core.litellm_client import chat_completion
 from app.core.publishers import PublisherError, get_adapter
@@ -34,6 +40,7 @@ from app.models.publication import (
     PublicationChannel,
     PublicationStatus,
 )
+from app.models.tenant import Tenant
 
 _SYSTEM = "You write concise, high-quality marketing copy."
 
@@ -50,9 +57,66 @@ def _run(coro):
     return loop.run_until_complete(coro)
 
 
-def _generate_text(brief: str, model: str) -> str:
+def _hold_generation_credits(db: Session, gen: Generation, *, model: str) -> None:
+    """Debit a worst-case cost estimate before the LLM call, same hard-stop
+    policy as app.routers.generations.create_generation — orchestrator runs
+    must not bypass billing just because they don't go through that router.
+    Free tier stays uncapped-but-metered, unchanged."""
+    tenant = db.get(Tenant, gen.tenant_id)
+    if not tenant or tenant.billing_plan not in ("pro", "team"):
+        return
+    messages, max_tokens = build_generation_messages(db, gen)
+    hold_cents = estimate_generation_cost_cents(
+        model=model, messages=messages, max_tokens=max_tokens
+    )
+    debit_credits_sync(db, tenant_id=gen.tenant_id, cost_cents=hold_cents)
+    gen.metadata_json = {**(gen.metadata_json or {}), "credit_hold_cents": hold_cents}
+    db.commit()
+
+
+def _clear_generation_hold(db: Session, gen: Generation) -> None:
+    meta = dict(gen.metadata_json or {})
+    meta.pop("credit_hold_cents", None)
+    gen.metadata_json = meta
+    db.commit()
+
+
+def _settle_generation_credits(db: Session, gen: Generation, raw_response) -> None:
+    """Reconcile a held estimate to the real cost after the LLM call —
+    mirrors app.workers.tasks.run_generation's settle step.
+
+    Clears the hold marker once settled: unlike run_generation (one flat
+    function, retried by re-running the whole thing), execute_run's article
+    pipeline is step-dispatched and idempotent on re-entry (Celery retry of
+    run_orchestrator, or an explicit /resume) — a re-entry that finds this
+    generation already COMPLETE must not settle/refund it a second time.
+    """
+    hold_cents = (gen.metadata_json or {}).get("credit_hold_cents")
+    if not hold_cents:
+        return
+    try:
+        real_cents = real_generation_cost_cents(raw_response)
+    except Exception:
+        real_cents = hold_cents  # pricing lookup failed — no refund, not a loss
+    refund_cents = max(0, hold_cents - real_cents)
+    if refund_cents:
+        grant_credits_sync(db, tenant_id=gen.tenant_id, amount_cents=refund_cents)
+    _clear_generation_hold(db, gen)
+
+
+def _refund_generation_hold(db: Session, gen: Generation) -> None:
+    """Refund the full hold — no charge for a failed generation. Clears the
+    hold marker so a retried re-entry (see _settle_generation_credits) can't
+    refund the same hold twice."""
+    hold_cents = (gen.metadata_json or {}).get("credit_hold_cents")
+    if hold_cents:
+        grant_credits_sync(db, tenant_id=gen.tenant_id, amount_cents=hold_cents)
+        _clear_generation_hold(db, gen)
+
+
+def _generate_text(db: Session, gen: Generation, brief: str, model: str) -> str:
     """Run the LLM for the given brief. Isolated so tests can monkeypatch it."""
-    content, _resp = _run(
+    content, raw_response = _run(
         chat_completion(
             messages=[
                 {"role": "system", "content": _SYSTEM},
@@ -61,6 +125,7 @@ def _generate_text(brief: str, model: str) -> str:
             model=model,
         )
     )
+    _settle_generation_credits(db, gen, raw_response)
     return content
 
 
@@ -107,9 +172,10 @@ def _generate_article(db: Session, gen: Generation, model: str) -> str:
     messages, max_tokens = build_generation_messages(
         db, gen, brand=brand, context=context
     )
-    content, _resp = _run(
+    content, raw_response = _run(
         chat_completion(messages=messages, model=model, max_tokens=max_tokens)
     )
+    _settle_generation_credits(db, gen, raw_response)
     return content
 
 
@@ -143,6 +209,7 @@ def _new_article_generation(
     )
     db.add(gen)
     db.commit()
+    _hold_generation_credits(db, gen, model=model)
     record_usage_sync(
         db,
         tenant_id=run.tenant_id,
@@ -157,11 +224,17 @@ def _new_article_generation(
 
 def _finish_article_generation(db: Session, gen: Generation, model: str) -> str:
     """Run the LLM for a pending article generation; FAILED the row on error."""
+    # A prior attempt on this same row may have already failed and refunded
+    # its hold (see _refund_generation_hold) — a retried re-entry needs its
+    # own hold for this attempt, or the retry's LLM call runs unbilled.
+    if not (gen.metadata_json or {}).get("credit_hold_cents"):
+        _hold_generation_credits(db, gen, model=model)
     try:
         text = _generate_article(db, gen, model)
     except Exception:
         gen.status = GenerationStatus.FAILED
         db.commit()
+        _refund_generation_hold(db, gen)
         raise
     gen.result = text
     gen.status = GenerationStatus.COMPLETE
@@ -380,8 +453,15 @@ def _execute_legacy_run(db: Session, run: OrchestratorRun) -> str:
         db.commit()
         run.generation_id = gen.id
         db.commit()
+        _hold_generation_credits(db, gen, model=model)
 
-        text = _generate_text(run.brief, model)
+        try:
+            text = _generate_text(db, gen, run.brief, model)
+        except Exception:
+            gen.status = GenerationStatus.FAILED
+            db.commit()
+            _refund_generation_hold(db, gen)
+            raise
         gen.result = text
         gen.status = GenerationStatus.COMPLETE
         db.commit()
