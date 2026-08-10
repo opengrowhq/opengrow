@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +21,9 @@ from app.core.authz import authz_client
 from app.models.brand import Brand
 from app.models.content_piece import ContentPiece, ContentStatus
 from app.models.analytics import RevenueEvent
+from app.models.generation import Generation
+from app.models.orchestrator import OrchestratorRun
+from app.models.publication import Publication
 from app.models.user import User
 from app.routers.content import _TRANSITIONS
 from app.version import API_VERSION
@@ -73,6 +77,85 @@ TOOLS: list[dict] = [
                 "status": {"type": "string"},
             },
             "required": ["content_id", "status"],
+        },
+    },
+    {
+        "name": "list_generations",
+        "description": "List recent AI generations in the caller's workspace.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+        },
+    },
+    {
+        "name": "get_generation",
+        "description": "Get one generation's status and result text.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"generation_id": {"type": "string"}},
+            "required": ["generation_id"],
+        },
+    },
+    {
+        "name": "create_generation",
+        "description": (
+            "Start a new AI generation from a brief. Runs async — the returned "
+            "generation is QUEUED; poll get_generation for the result. On a "
+            "paid plan this holds credit up front for the estimated cost."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "brief": {"type": "string"},
+                "model": {
+                    "type": "string",
+                    "description": "LiteLLM model string; falls back to the workspace default.",
+                },
+            },
+            "required": ["brief"],
+        },
+    },
+    {
+        "name": "list_orchestrator_runs",
+        "description": (
+            "List recent orchestrator runs (multi-step generate -> promote -> "
+            "publish pipelines) in the caller's workspace."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_orchestrator_run",
+        "description": "Get one orchestrator run's status, step, and result.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"run_id": {"type": "string"}},
+            "required": ["run_id"],
+        },
+    },
+    {
+        "name": "create_orchestrator_run",
+        "description": (
+            "Start a new orchestrator run: generate from a brief, promote to a "
+            "draft content piece, and optionally auto-publish. Runs async — poll "
+            "get_orchestrator_run for progress. For the article pipeline "
+            "(outline -> approval -> draft), use the REST API directly."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "brief": {"type": "string"},
+                "model": {"type": "string"},
+                "title": {"type": "string"},
+            },
+            "required": ["brief"],
+        },
+    },
+    {
+        "name": "list_publications",
+        "description": "List recent content-publishing attempts and their status.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
         },
     },
 ]
@@ -184,12 +267,167 @@ async def _transition_content(db: AsyncSession, user: User, args: dict) -> dict:
     return {"id": str(cp.id), "title": cp.title, "status": cp.status.value}
 
 
+async def _list_generations(db: AsyncSession, user: User, args: dict) -> dict:
+    limit = min(int(args.get("limit", 20) or 20), 100)
+    row = await db.execute(
+        select(Generation)
+        .where(
+            Generation.tenant_id == user.tenant_id,
+            Generation.is_deleted.is_(False),
+        )
+        .order_by(Generation.created_at.desc())
+        .limit(limit)
+    )
+    return {
+        "items": [
+            {"id": str(g.id), "brief": g.brief, "status": g.status.value}
+            for g in row.scalars().all()
+        ]
+    }
+
+
+async def _get_generation(db: AsyncSession, user: User, args: dict) -> dict:
+    generation_id = (args.get("generation_id") or "").strip()
+    if not generation_id:
+        raise ValueError("generation_id is required")
+    try:
+        gen_uuid = UUID(generation_id)
+    except ValueError:
+        raise ValueError(f"Invalid generation_id: {generation_id}")
+
+    if not await authz_client.check(str(user.id), "reader", f"generation:{gen_uuid}"):
+        raise ValueError("Not permitted to view this generation")
+
+    gen = await db.scalar(
+        select(Generation).where(
+            Generation.id == gen_uuid,
+            Generation.tenant_id == user.tenant_id,
+            Generation.is_deleted.is_(False),
+        )
+    )
+    if gen is None:
+        raise ValueError(f"Generation not found: {generation_id}")
+    return {
+        "id": str(gen.id),
+        "brief": gen.brief,
+        "status": gen.status.value,
+        "result": gen.result,
+        "error_message": gen.error_message,
+    }
+
+
+async def _create_generation(db: AsyncSession, user: User, args: dict) -> dict:
+    # Reuses the real REST handler (authz, credit hold, task dispatch, usage
+    # metering) rather than re-deriving that logic here — it's billing-
+    # critical and has already had subtle bugs fixed in it twice.
+    from app.routers.generations import create_generation
+    from app.schemas.generation import GenerationCreate
+
+    brief = (args.get("brief") or "").strip()
+    if not brief:
+        raise ValueError("brief is required")
+
+    payload = GenerationCreate(brief=brief, model=args.get("model"))
+    out = await create_generation(payload, user, db)
+    return out.model_dump()
+
+
+async def _list_orchestrator_runs(db: AsyncSession, user: User, args: dict) -> dict:
+    row = await db.execute(
+        select(OrchestratorRun)
+        .where(
+            OrchestratorRun.tenant_id == user.tenant_id,
+            OrchestratorRun.is_deleted.is_(False),
+        )
+        .order_by(OrchestratorRun.created_at.desc())
+        .limit(50)
+    )
+    return {
+        "items": [
+            {
+                "run_id": str(r.id),
+                "status": r.status.value,
+                "step": r.step,
+                "brief": r.brief,
+            }
+            for r in row.scalars().all()
+        ]
+    }
+
+
+async def _get_orchestrator_run(db: AsyncSession, user: User, args: dict) -> dict:
+    from app.routers.orchestrator import _get_tenant_run, _out
+
+    run_id = (args.get("run_id") or "").strip()
+    if not run_id:
+        raise ValueError("run_id is required")
+    try:
+        run_uuid = UUID(run_id)
+    except ValueError:
+        raise ValueError(f"Invalid run_id: {run_id}")
+
+    run = await _get_tenant_run(db, run_uuid, user.tenant_id)
+    result = None
+    if run.generation_id:
+        gen = await db.get(Generation, run.generation_id)
+        result = gen.result if gen else None
+    return _out(run, result).model_dump()
+
+
+async def _create_orchestrator_run(db: AsyncSession, user: User, args: dict) -> dict:
+    # Reuses the real REST handler for the same reason as create_generation.
+    from app.routers.orchestrator import create_run
+    from app.schemas.orchestrator import OrchestratorRunCreate
+
+    brief = (args.get("brief") or "").strip()
+    if not brief:
+        raise ValueError("brief is required")
+
+    payload = OrchestratorRunCreate(
+        brief=brief, model=args.get("model"), title=args.get("title")
+    )
+    out = await create_run(payload, user, db)
+    return out.model_dump()
+
+
+async def _list_publications(db: AsyncSession, user: User, args: dict) -> dict:
+    limit = min(int(args.get("limit", 20) or 20), 100)
+    row = await db.execute(
+        select(Publication)
+        .where(
+            Publication.tenant_id == user.tenant_id,
+            Publication.is_deleted.is_(False),
+        )
+        .order_by(Publication.created_at.desc())
+        .limit(limit)
+    )
+    return {
+        "items": [
+            {
+                "id": str(p.id),
+                "content_piece_id": str(p.content_piece_id),
+                "channel": p.channel.value,
+                "status": p.status.value,
+                "url": p.url,
+            }
+            for p in row.scalars().all()
+        ]
+    }
+
+
 _HANDLERS = {
     "list_content": _list_content,
     "create_content": _create_content,
     "get_attribution_summary": _attribution_summary,
     "list_brands": _list_brands,
     "transition_content": _transition_content,
+    "list_generations": _list_generations,
+    "get_generation": _get_generation,
+    "create_generation": _create_generation,
+    "list_orchestrator_runs": _list_orchestrator_runs,
+    "get_orchestrator_run": _get_orchestrator_run,
+    "create_orchestrator_run": _create_orchestrator_run,
+    "list_publications": _list_publications,
 }
 
 
@@ -239,6 +477,19 @@ async def handle_jsonrpc(payload: dict, db: AsyncSession, user: User) -> dict | 
             return _result(
                 request_id,
                 {"content": [{"type": "text", "text": str(e)}], "isError": True},
+            )
+        except HTTPException as e:
+            # create_generation/create_orchestrator_run reuse the real REST
+            # handlers, which raise HTTPException for expected outcomes an
+            # agent needs to handle inline (402 insufficient credits, 403
+            # not permitted, 404 not found) — surface those as a JSON-RPC
+            # tool error like ValueError, not an HTTP-transport failure.
+            return _result(
+                request_id,
+                {
+                    "content": [{"type": "text", "text": str(e.detail)}],
+                    "isError": True,
+                },
             )
         return _result(
             request_id,
