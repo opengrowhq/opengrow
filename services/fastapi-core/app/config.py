@@ -109,6 +109,11 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRICE_ID_PRO: str = ""
     STRIPE_PRICE_ID_TEAM: str = ""
+    # Team plan is base + per-seat: STRIPE_PRICE_ID_TEAM covers the first
+    # TEAM_INCLUDED_SEATS members; this price bills each seat beyond that,
+    # as a second line item on the same subscription (not a separate one).
+    STRIPE_PRICE_ID_TEAM_SEAT: str = ""
+    TEAM_INCLUDED_SEATS: int = 5
     # Base URL the browser is served from — Checkout/Billing Portal redirect here.
     FRONTEND_BASE_URL: str = "http://localhost:3000"
 

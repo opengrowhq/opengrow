@@ -17,7 +17,7 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -27,6 +27,7 @@ from app.database import get_db
 from app.models.invite import Invite, InviteStatus, generate_invite_token
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.routers.billing import sync_seat_quantity
 from app.schemas.auth import TokenPair
 from app.schemas.invite import InviteAcceptRequest, InviteCreate, InviteOut, MemberOut
 
@@ -188,6 +189,47 @@ async def list_members(
     ]
 
 
+@router.delete("/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_member(
+    user_id: str,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Deactivate a tenant member (soft — flips is_active, matching the
+    existing GET /members filter, rather than deleting the row and losing
+    the audit trail / FK references)."""
+    await _assert_tenant_admin(current)
+
+    if user_id == str(current.id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "You can't remove yourself from the workspace"
+        )
+
+    target = await db.scalar(
+        select(User).where(User.id == user_id, User.tenant_id == current.tenant_id)
+    )
+    if target is None or not target.is_active:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Member not found")
+
+    if await authz_client.check(
+        str(target.id), "admin", f"tenant:{current.tenant_id}"
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Can't remove an admin — transfer admin to another member first",
+        )
+
+    target.is_active = False
+    await db.commit()
+
+    member_count = await db.scalar(
+        select(func.count(User.id)).where(
+            User.tenant_id == current.tenant_id, User.is_active.is_(True)
+        )
+    )
+    await sync_seat_quantity(db, current.tenant_id, member_count or 0)
+
+
 @router.post("/{token}/accept", response_model=TokenPair)
 async def accept_invite(
     token: str,
@@ -234,6 +276,13 @@ async def accept_invite(
         await authz_client.write_membership(
             str(user.id), str(invite.tenant_id), role="member"
         )
+
+    member_count = await db.scalar(
+        select(func.count(User.id)).where(
+            User.tenant_id == invite.tenant_id, User.is_active.is_(True)
+        )
+    )
+    await sync_seat_quantity(db, invite.tenant_id, member_count or 0)
 
     return TokenPair(
         access_token=issue_access(str(user.id), str(invite.tenant_id)),

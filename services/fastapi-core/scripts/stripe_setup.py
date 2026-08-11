@@ -28,6 +28,16 @@ _PLANS = [
         "unit_amount": 7900,
         "interval": "month",
     },
+    {
+        # Second line item on a Team subscription, billed per seat beyond
+        # the plan's included headcount (settings.TEAM_INCLUDED_SEATS) —
+        # not a standalone plan a tenant can subscribe to directly.
+        "plan_key": "team_seat",
+        "name": "OpenGrow Team — additional seat",
+        "env_var": "STRIPE_PRICE_ID_TEAM_SEAT",
+        "unit_amount": 1500,
+        "interval": "month",
+    },
 ]
 
 
