@@ -7,6 +7,7 @@ import {
   createInvite,
   listInvites,
   listMembers,
+  removeMember,
   revokeInvite,
 } from "./api";
 import { fetchMe } from "@/features/auth/api";
@@ -35,6 +36,14 @@ export function useRevokeInvite() {
   return useMutation({
     mutationFn: (inviteId: string) => revokeInvite(inviteId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["team", "invites"] }),
+  });
+}
+
+export function useRemoveMember() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => removeMember(userId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["team", "members"] }),
   });
 }
 

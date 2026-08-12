@@ -23,6 +23,8 @@ export const createInvite = (email: string, role: "member" | "admin" = "member")
 
 export const revokeInvite = (inviteId: string) => apiDelete(`/invites/${inviteId}`);
 
+export const removeMember = (userId: string) => apiDelete(`/invites/members/${userId}`);
+
 export type AcceptInviteInput = {
   token: string;
   display_name: string;
