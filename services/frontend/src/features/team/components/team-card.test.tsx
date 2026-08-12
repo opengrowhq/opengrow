@@ -11,16 +11,18 @@ vi.mock("../api", async (importOriginal) => {
     listInvites: vi.fn(),
     createInvite: vi.fn(),
     revokeInvite: vi.fn(),
+    removeMember: vi.fn(),
   };
 });
 
-import { listMembers, listInvites, createInvite, revokeInvite } from "../api";
+import { listMembers, listInvites, createInvite, revokeInvite, removeMember } from "../api";
 import { TeamCard } from "./team-card";
 
 const listMembersMock = vi.mocked(listMembers);
 const listInvitesMock = vi.mocked(listInvites);
 const createInviteMock = vi.mocked(createInvite);
 const revokeInviteMock = vi.mocked(revokeInvite);
+const removeMemberMock = vi.mocked(removeMember);
 
 const members = [{ id: "u1", email: "owner@acme.com", display_name: "Owner" }];
 const pendingInvite = {
@@ -82,5 +84,33 @@ describe("TeamCard", () => {
     await waitFor(() => {
       expect(revokeInviteMock).toHaveBeenCalledWith("inv1");
     });
+  });
+
+  it("removes a member", async () => {
+    removeMemberMock.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderCard();
+
+    expect(await screen.findByText("Owner")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /remove/i }));
+
+    await waitFor(() => {
+      expect(removeMemberMock).toHaveBeenCalledWith("u1");
+    });
+  });
+
+  it("shows the backend error when removal is rejected", async () => {
+    removeMemberMock.mockRejectedValue(
+      new Error("You can't remove yourself from the workspace"),
+    );
+    const user = userEvent.setup();
+    renderCard();
+
+    expect(await screen.findByText("Owner")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /remove/i }));
+
+    expect(
+      await screen.findByText("You can't remove yourself from the workspace"),
+    ).toBeInTheDocument();
   });
 });

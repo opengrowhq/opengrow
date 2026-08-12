@@ -4,13 +4,14 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { Badge } from "@/components/ui/data-display";
-import { useCreateInvite, useInvites, useMembers, useRevokeInvite } from "../hooks";
+import { useCreateInvite, useInvites, useMembers, useRemoveMember, useRevokeInvite } from "../hooks";
 
 export function TeamCard() {
   const { data: members, isLoading: membersLoading } = useMembers();
   const { data: invites, isLoading: invitesLoading } = useInvites();
   const createInvite = useCreateInvite();
   const revokeInvite = useRevokeInvite();
+  const removeMember = useRemoveMember();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"member" | "admin">("member");
   const [notice, setNotice] = useState<string | null>(null);
@@ -32,7 +33,8 @@ export function TeamCard() {
   const pendingInvites = (invites ?? []).filter((i) => i.status === "PENDING");
   const error =
     (createInvite.error instanceof Error ? createInvite.error.message : null) ??
-    (revokeInvite.error instanceof Error ? revokeInvite.error.message : null);
+    (revokeInvite.error instanceof Error ? revokeInvite.error.message : null) ??
+    (removeMember.error instanceof Error ? removeMember.error.message : null);
 
   return (
     <section className="rounded-[var(--radius-lg)] border border-gray-200 bg-white p-5 shadow-card">
@@ -94,10 +96,20 @@ export function TeamCard() {
           {(members ?? []).map((m) => (
             <li
               key={m.id}
-              className="flex items-center justify-between rounded-xl border border-gray-100 px-3 py-2 text-sm"
+              className="flex items-center justify-between gap-2 rounded-xl border border-gray-100 px-3 py-2 text-sm"
             >
-              <span className="font-semibold text-gray-900">{m.display_name}</span>
-              <span className="text-xs font-medium text-gray-500">{m.email}</span>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-gray-900">{m.display_name}</span>
+                <span className="text-xs font-medium text-gray-500">{m.email}</span>
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => removeMember.mutate(m.id)}
+                loading={removeMember.isPending}
+              >
+                Remove
+              </Button>
             </li>
           ))}
         </ul>
