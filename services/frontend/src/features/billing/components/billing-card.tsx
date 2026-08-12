@@ -28,6 +28,8 @@ export function BillingCard() {
 
   const plan = sub?.billing_plan ?? "free";
   const isPaid = plan !== "free";
+  const isPastDue =
+    sub?.subscription_status === "PAST_DUE" || sub?.subscription_status === "UNPAID";
 
   function upgrade(target: "pro" | "team") {
     setError(null);
@@ -75,6 +77,23 @@ export function BillingCard() {
 
       {isLoading && !sub && (
         <p className="mt-4 text-xs font-medium text-gray-400">Loading plan…</p>
+      )}
+
+      {isPastDue && (
+        <div className="mt-4 rounded-xl border border-red-100 bg-red-50 px-3 py-2">
+          <p className="text-xs font-semibold text-red-700">
+            Your last payment failed. Update your payment method to keep your{" "}
+            {(PLAN_LABELS[plan] ?? plan)} plan active.
+          </p>
+          <Button
+            className="mt-2"
+            variant="secondary"
+            onClick={manage}
+            loading={portal.isPending}
+          >
+            Update payment method
+          </Button>
+        </div>
       )}
 
       {sub?.cancel_at_period_end && (
