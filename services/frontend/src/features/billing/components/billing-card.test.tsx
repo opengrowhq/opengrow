@@ -39,6 +39,12 @@ const proPlan = {
   current_period_end: "2026-09-01T00:00:00Z",
   cancel_at_period_end: false,
 };
+const pastDuePlan = {
+  billing_plan: "pro",
+  subscription_status: "PAST_DUE",
+  current_period_end: "2026-09-01T00:00:00Z",
+  cancel_at_period_end: false,
+};
 
 function renderCard() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -83,6 +89,36 @@ describe("BillingCard", () => {
     expect(
       await screen.findByText(/set to cancel at the end of the current billing period/),
     ).toBeInTheDocument();
+  });
+
+  it("shows a past-due warning for a past-due plan", async () => {
+    getSubscriptionMock.mockResolvedValue(pastDuePlan);
+    renderCard();
+    expect(await screen.findByText(/Your last payment failed/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Update payment method" }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not show the past-due warning for an active plan", async () => {
+    getSubscriptionMock.mockResolvedValue(proPlan);
+    renderCard();
+    expect(await screen.findByText("PRO")).toBeInTheDocument();
+    expect(screen.queryByText(/Your last payment failed/)).not.toBeInTheDocument();
+  });
+
+  it("redirects to the Billing Portal from the past-due warning", async () => {
+    const user = userEvent.setup();
+    getSubscriptionMock.mockResolvedValue(pastDuePlan);
+    createPortalSessionMock.mockResolvedValue({ portal_url: "https://stripe.test/portal/2" });
+    renderCard();
+
+    await user.click(await screen.findByRole("button", { name: "Update payment method" }));
+
+    await waitFor(() => {
+      expect(createPortalSessionMock).toHaveBeenCalled();
+      expect(window.location.href).toBe("https://stripe.test/portal/2");
+    });
   });
 
   it("redirects to the Checkout URL on upgrade", async () => {
