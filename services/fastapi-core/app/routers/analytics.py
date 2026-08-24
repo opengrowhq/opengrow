@@ -40,6 +40,10 @@ from app.models.analytics_connector import (
     AnalyticsConnectorStatus,
 )
 from app.models.content_piece import ContentPiece
+from app.models.content_recommendation import (
+    ContentRecommendation,
+    ContentRecommendationStatus,
+)
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.analytics import (
@@ -57,6 +61,7 @@ from app.schemas.analytics import (
     ChannelTrendOut,
     ChannelAttributionOut,
     ContentAttributionOut,
+    ContentRecommendationOut,
     ContentTrendOut,
     PublicTrackEvent,
     PublicTrackOut,
@@ -1358,3 +1363,148 @@ async def source_attribution(
         key=lambda item: (item.revenue_cents, item.customers, item.leads, item.events),
         reverse=True,
     )
+
+
+# -----------------------------------------------------------------------------
+# Attribution loop: "what to write/refresh next" recommendations, computed
+# from real trend data by app.workers.tasks.generate_content_recommendations
+# (daily beat sweep). This router only reads/actions the persisted rows —
+# see that task for how scores are computed.
+# -----------------------------------------------------------------------------
+def _recommendation_out(rec: ContentRecommendation) -> ContentRecommendationOut:
+    return ContentRecommendationOut(
+        id=str(rec.id),
+        kind=rec.kind.value,
+        content_piece_id=str(rec.content_piece_id) if rec.content_piece_id else None,
+        title=rec.title,
+        rationale=rec.rationale,
+        score=rec.score,
+        status=rec.status.value,
+        orchestrator_run_id=(
+            str(rec.orchestrator_run_id) if rec.orchestrator_run_id else None
+        ),
+        created_at=rec.created_at,
+    )
+
+
+async def _load_recommendation(
+    db: AsyncSession, tenant_id: UUID, rec_id: UUID
+) -> ContentRecommendation:
+    row = await db.execute(
+        select(ContentRecommendation).where(
+            ContentRecommendation.id == rec_id,
+            ContentRecommendation.tenant_id == tenant_id,
+            ContentRecommendation.is_deleted.is_(False),
+        )
+    )
+    rec = row.scalar_one_or_none()
+    if not rec:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Recommendation not found")
+    return rec
+
+
+@router.get("/recommendations", response_model=list[ContentRecommendationOut])
+async def list_recommendations(
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    status_filter: str | None = Query(default="PENDING", alias="status"),
+):
+    await _assert_tenant_reader(current)
+    stmt = select(ContentRecommendation).where(
+        ContentRecommendation.tenant_id == current.tenant_id,
+        ContentRecommendation.is_deleted.is_(False),
+    )
+    if status_filter:
+        try:
+            stmt = stmt.where(
+                ContentRecommendation.status == ContentRecommendationStatus(
+                    status_filter.upper()
+                )
+            )
+        except ValueError:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"Unknown status: {status_filter}"
+            )
+    stmt = stmt.order_by(ContentRecommendation.score.desc())
+    rows = await db.execute(stmt)
+    return [_recommendation_out(r) for r in rows.scalars().all()]
+
+
+@router.post(
+    "/recommendations/{recommendation_id}/dismiss",
+    response_model=ContentRecommendationOut,
+)
+async def dismiss_recommendation(
+    recommendation_id: UUID,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    await _assert_tenant_writer(current)
+    rec = await _load_recommendation(db, current.tenant_id, recommendation_id)
+    if rec.status != ContentRecommendationStatus.PENDING:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Recommendation already {rec.status.value.lower()}",
+        )
+    rec.status = ContentRecommendationStatus.DISMISSED
+    await db.commit()
+    await db.refresh(rec)
+    return _recommendation_out(rec)
+
+
+@router.post(
+    "/recommendations/{recommendation_id}/start-run",
+    response_model=ContentRecommendationOut,
+)
+async def start_run_from_recommendation(
+    recommendation_id: UUID,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Turn a recommendation into a real orchestrator run — the attribution
+    loop's actual feedback step. Reuses the real POST /orchestrator/runs
+    handler rather than re-deriving run-creation logic (same "don't hand-
+    copy business logic" precedent as the MCP tools' create_generation/
+    create_orchestrator_run wiring)."""
+    from app.routers.orchestrator import create_run
+    from app.schemas.article import ArticleBrief
+    from app.schemas.orchestrator import OrchestratorRunCreate
+
+    await _assert_tenant_writer(current)
+    rec = await _load_recommendation(db, current.tenant_id, recommendation_id)
+    if rec.status != ContentRecommendationStatus.PENDING:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Recommendation already {rec.status.value.lower()}",
+        )
+
+    article_kwargs: dict = {"notes": rec.rationale}
+    if rec.content_piece_id:
+        source = await db.get(ContentPiece, rec.content_piece_id)
+        if source:
+            src_article = (source.metadata_json or {}).get("article") or {}
+            article_kwargs["topic"] = (
+                f"Refresh: {source.title}"
+                if rec.kind.value == "REFRESH"
+                else f"Follow-up to: {source.title}"
+            )
+            for key in ("primary_keyword", "secondary_keywords", "tags", "audience"):
+                if src_article.get(key):
+                    article_kwargs[key] = src_article[key]
+    if "topic" not in article_kwargs:
+        article_kwargs["topic"] = rec.title
+
+    run_out = await create_run(
+        OrchestratorRunCreate(
+            brief=article_kwargs["topic"],
+            article=ArticleBrief(**article_kwargs),
+        ),
+        current,
+        db,
+    )
+
+    rec.status = ContentRecommendationStatus.ACTIONED
+    rec.orchestrator_run_id = UUID(run_out.run_id)
+    await db.commit()
+    await db.refresh(rec)
+    return _recommendation_out(rec)

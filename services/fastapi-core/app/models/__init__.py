@@ -9,6 +9,11 @@ from app.models.audit import AuditLog  # noqa: F401
 from app.models.base import TenantMixin  # noqa: F401
 from app.models.brand import Brand, BrandStatus  # noqa: F401
 from app.models.content_piece import ContentPiece, ContentStatus  # noqa: F401
+from app.models.content_recommendation import (  # noqa: F401
+    ContentRecommendation,
+    ContentRecommendationKind,
+    ContentRecommendationStatus,
+)
 from app.models.generation import Generation, GenerationStatus  # noqa: F401
 from app.models.github_credential import GitHubCredential  # noqa: F401
 from app.models.invite import Invite, InviteStatus, generate_invite_token  # noqa: F401

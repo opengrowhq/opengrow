@@ -8,7 +8,7 @@ import re
 import smtplib
 from datetime import datetime, timezone
 from email.message import EmailMessage
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -27,7 +27,9 @@ from app.core.google_oauth import refresh_google_access_token
 from app.core.litellm_client import chat_completion, embed
 from app.core.minio_client import get_object_bytes, promote_to_assets
 from app.core.qdrant import upsert_asset_embedding
+from app.core.analytics_window import analytics_periods
 from app.core.article_grounding import ground_article
+from app.core.content_recommendations import build_recommendations
 from app.core.credential_crypto import CredentialCryptoError, decrypt_secret
 from app.core.credits import grant_credits_sync, real_generation_cost_cents
 from app.core.generation_messages import build_generation_messages
@@ -43,6 +45,11 @@ from app.models.analytics_connector import (
 )
 from app.models.brand import Brand, BrandStatus
 from app.models.content_piece import ContentPiece, ContentStatus
+from app.models.content_recommendation import (
+    ContentRecommendation,
+    ContentRecommendationKind,
+    ContentRecommendationStatus,
+)
 from app.models.generation import Generation, GenerationStatus
 from app.models.github_credential import GitHubCredential
 from app.models.publication import Publication, PublicationChannel, PublicationStatus
@@ -805,3 +812,119 @@ def _publish_scheduled_content_piece(db, content_piece_id: str) -> str:
 def publish_scheduled_content_piece(self, content_piece_id: str) -> str:
     with _SyncSession() as db:
         return _publish_scheduled_content_piece(db, content_piece_id)
+
+
+# -----------------------------------------------------------------------------
+# Attribution loop: decay/growth recommendations (content calendar's "what to
+# write/refresh next" — closes Phase 6). Sync twin of app.routers.analytics'
+# _content_counts_for_period (that helper is async-only, and this codebase's
+# convention is sync Session + sync ORM queries inside Celery tasks, same as
+# every other _sync-suffixed helper here).
+# -----------------------------------------------------------------------------
+RECOMMENDATION_WINDOW_DAYS = 30
+
+
+def _content_counts_for_period_sync(
+    db, tenant_id: UUID, *, start: datetime, end: datetime
+) -> dict[UUID, dict[str, int]]:
+    rows = (
+        db.query(RevenueEvent)
+        .filter(
+            RevenueEvent.tenant_id == tenant_id,
+            RevenueEvent.content_piece_id.isnot(None),
+            RevenueEvent.is_deleted.is_(False),
+            RevenueEvent.occurred_at >= start,
+            RevenueEvent.occurred_at < end,
+        )
+        .all()
+    )
+    by_content: dict[UUID, dict[str, int]] = {}
+    for event in rows:
+        counts = by_content.setdefault(
+            event.content_piece_id,
+            {
+                "events": 0,
+                "visits": 0,
+                "signups": 0,
+                "leads": 0,
+                "customers": 0,
+                "revenue_cents": 0,
+            },
+        )
+        event_count = event.event_count or 1
+        counts["events"] += event_count
+        if event.event_type == RevenueEventType.REVENUE:
+            counts["revenue_cents"] += event.amount_cents
+    return by_content
+
+
+def _generate_recommendations_for_tenant(db, tenant_id: UUID) -> int:
+    """Core logic, isolated from the Celery task wrapper so tests can pass
+    in the test session directly (same split as the scheduled-publish
+    tasks above)."""
+    previous_start, current_start, end = analytics_periods(RECOMMENDATION_WINDOW_DAYS)
+    current_counts = _content_counts_for_period_sync(
+        db, tenant_id, start=current_start, end=end
+    )
+    previous_counts = _content_counts_for_period_sync(
+        db, tenant_id, start=previous_start, end=current_start
+    )
+
+    published = (
+        db.query(ContentPiece)
+        .filter(
+            ContentPiece.tenant_id == tenant_id,
+            ContentPiece.status == ContentStatus.PUBLISHED,
+            ContentPiece.is_deleted.is_(False),
+        )
+        .all()
+    )
+    pieces = [{"id": cp.id, "title": cp.title} for cp in published]
+    suggestions = build_recommendations(
+        pieces, current_counts=current_counts, previous_counts=previous_counts
+    )
+
+    # Skip a suggestion if an open (PENDING) one for the same piece+kind
+    # already exists — the partial unique index would reject the insert
+    # anyway, but checking first avoids a noisy IntegrityError per sweep.
+    existing_pending = {
+        (row.content_piece_id, row.kind)
+        for row in db.query(
+            ContentRecommendation.content_piece_id, ContentRecommendation.kind
+        ).filter(
+            ContentRecommendation.tenant_id == tenant_id,
+            ContentRecommendation.status == ContentRecommendationStatus.PENDING,
+            ContentRecommendation.is_deleted.is_(False),
+        )
+    }
+
+    created = 0
+    for s in suggestions:
+        kind = ContentRecommendationKind(s["kind"])
+        if (s["content_piece_id"], kind) in existing_pending:
+            continue
+        db.add(
+            ContentRecommendation(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                kind=kind,
+                content_piece_id=s["content_piece_id"],
+                title=s["title"],
+                rationale=s["rationale"],
+                score=s["score"],
+            )
+        )
+        created += 1
+    if created:
+        db.commit()
+    return created
+
+
+@celery.task(name="app.workers.tasks.generate_content_recommendations")
+def generate_content_recommendations() -> str:
+    with _SyncSession() as db:
+        tenant_ids = [row[0] for row in db.query(Tenant.id).all()]
+        total = 0
+        for tenant_id in tenant_ids:
+            total += _generate_recommendations_for_tenant(db, tenant_id)
+    return f"created:{total}"

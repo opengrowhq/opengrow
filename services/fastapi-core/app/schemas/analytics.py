@@ -99,6 +99,18 @@ class TrackingStatusOut(BaseModel):
     last_seen_at: datetime | None = None
 
 
+class ContentRecommendationOut(BaseModel):
+    id: str
+    kind: str
+    content_piece_id: str | None = None
+    title: str
+    rationale: str
+    score: float
+    status: str
+    orchestrator_run_id: str | None = None
+    created_at: datetime
+
+
 class ContentAttributionOut(AttributionSummaryOut):
     content_piece_id: str
     title: str
