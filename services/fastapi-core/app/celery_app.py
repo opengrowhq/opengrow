@@ -26,6 +26,7 @@ celery.conf.update(
         "app.workers.tasks.sync_connected_analytics_connectors": {"queue": "cpu_light"},
         "app.workers.tasks.publish_due_content": {"queue": "cpu_light"},
         "app.workers.tasks.publish_scheduled_content_piece": {"queue": "cpu_light"},
+        "app.workers.tasks.generate_content_recommendations": {"queue": "cpu_light"},
     },
     task_acks_late=True,
     task_reject_on_worker_lost=True,
@@ -45,6 +46,10 @@ celery.conf.update(
         "content-calendar-publish-hourly": {
             "task": "app.workers.tasks.publish_due_content",
             "schedule": crontab(minute=0),
+        },
+        "content-recommendations-daily": {
+            "task": "app.workers.tasks.generate_content_recommendations",
+            "schedule": crontab(hour=5, minute=0),
         },
     },
 )
