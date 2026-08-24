@@ -5,7 +5,11 @@ Two pipelines share the `execute_run` entry point:
 - **Legacy generic copy** (no `details["article"]`): generate → promote →
   optional publish, exactly the pre-design-C behavior.
 - **Article pipeline** (`details["article"]` set): outline → optional human
-  pause (`AWAITING_OUTLINE_APPROVAL`) → draft → promote → guarded publish.
+  pause (`AWAITING_OUTLINE_APPROVAL`) → draft → score → promote → guarded
+  publish. The score step is a quality gate (see app.core.quality_score): a
+  draft below ARTICLE_SCORE_THRESHOLD is regenerated with feedback, up to
+  ARTICLE_SCORE_MAX_RETRIES times, before the run fails outright — nothing
+  reaches promote/publish without clearing the bar.
 
 `execute_run` dispatches on `run.step` and every step is idempotent (work
 already recorded in `run.details` is not repeated), so a run is safe to
@@ -31,6 +35,7 @@ from app.core.credits import (
 from app.core.generation_messages import build_generation_messages
 from app.core.litellm_client import chat_completion
 from app.core.publishers import PublisherError, get_adapter
+from app.core.quality_score import feedback_for_retry, score_draft
 from app.core.usage import record_usage_sync
 from app.models.content_piece import ContentPiece, ContentStatus
 from app.models.generation import Generation, GenerationStatus
@@ -313,7 +318,71 @@ def _step_draft(db: Session, run: OrchestratorRun) -> None:
         db.commit()
 
     run.generation_id = gen.id  # the final artifact of the pipeline
-    run.step = "promote"
+    run.step = "score"
+    db.commit()
+
+
+class QualityGateFailed(Exception):
+    """The draft never cleared ARTICLE_SCORE_THRESHOLD within the retry budget."""
+
+
+def _step_score(db: Session, run: OrchestratorRun) -> None:
+    """Quality gate: score the draft, and either advance to promote or send
+    the run back to draft with feedback for a regenerate attempt.
+
+    Clearing draft_gen_id/draft_text on a low score makes _step_draft's own
+    idempotency check (`if gen is None` / `if not details.get("draft_text")`)
+    naturally create a fresh Generation row and re-run the LLM — which is
+    also what makes the credit hold/settle mechanism correct here: each
+    retry is a brand-new Generation, so it holds and settles independently
+    (see _hold_generation_credits / _finish_article_generation's own retry
+    handling), never double-charging or leaving an attempt unbilled.
+    """
+    details = dict(run.details or {})
+    draft_text = details.get("draft_text") or ""
+    result = score_draft(
+        draft_text, details.get("article") or {}, details.get("sections")
+    )
+    retries = int(details.get("score_retries") or 0)
+    details = {
+        **details,
+        "score": result["score"],
+        "score_breakdown": result["breakdown"],
+        "score_retries": retries,
+    }
+
+    if result["score"] >= settings.ARTICLE_SCORE_THRESHOLD:
+        run.details = details
+        run.step = "promote"
+        db.commit()
+        return
+
+    if retries >= settings.ARTICLE_SCORE_MAX_RETRIES:
+        run.details = details
+        db.commit()
+        raise QualityGateFailed(
+            f"draft scored {result['score']:.2f} "
+            f"(threshold {settings.ARTICLE_SCORE_THRESHOLD}) "
+            f"after {retries} retries"
+        )
+
+    # Fold scorer feedback into the brief's notes so the regenerated draft
+    # actually addresses the shortfall, then clear the failed attempt so
+    # _step_draft creates a fresh Generation on re-entry.
+    article = dict(details.get("article") or {})
+    feedback = feedback_for_retry(result["breakdown"])
+    if feedback:
+        base_notes = (article.get("notes") or "").strip()
+        article["notes"] = (base_notes + " " + feedback).strip()
+    details = {
+        **details,
+        "article": article,
+        "score_retries": retries + 1,
+    }
+    details.pop("draft_gen_id", None)
+    details.pop("draft_text", None)
+    run.details = details
+    run.step = "draft"
     db.commit()
 
 
@@ -417,6 +486,15 @@ def execute_run(db: Session, run_id: UUID | str) -> str:
             return "awaiting-outline-approval"
         if run.step == "draft":
             _step_draft(db, run)
+        while run.step == "score":
+            # A re-entry (Celery retry, /resume) can land exactly here if the
+            # process died after _step_draft committed step="score" but
+            # before _step_score ran — handling "score" directly (not just
+            # as a side effect of the draft branch above) keeps that case
+            # from silently skipping the gate.
+            _step_score(db, run)
+            if run.step == "draft":
+                _step_draft(db, run)
         if run.step == "promote":
             _step_promote(db, run)
         if run.step == "publish":
