@@ -28,8 +28,12 @@ from app.core.litellm_client import chat_completion, embed
 from app.core.minio_client import get_object_bytes, promote_to_assets
 from app.core.qdrant import upsert_asset_embedding
 from app.core.article_grounding import ground_article
+from app.core.credential_crypto import CredentialCryptoError, decrypt_secret
 from app.core.credits import grant_credits_sync, real_generation_cost_cents
 from app.core.generation_messages import build_generation_messages
+from app.core.github_publisher import GitHubPublishError
+from app.core.publishers import PublisherError, get_adapter
+from app.core.usage import record_usage_sync
 from app.models.analytics import RevenueEvent, RevenueEventType
 from app.models.asset import Asset, AssetStatus
 from app.models.analytics_connector import (
@@ -38,7 +42,10 @@ from app.models.analytics_connector import (
     AnalyticsConnectorStatus,
 )
 from app.models.brand import Brand, BrandStatus
+from app.models.content_piece import ContentPiece, ContentStatus
 from app.models.generation import Generation, GenerationStatus
+from app.models.github_credential import GitHubCredential
+from app.models.publication import Publication, PublicationChannel, PublicationStatus
 from app.models.tenant import Tenant
 
 log = logging.getLogger("worker")
@@ -614,3 +621,187 @@ def build_brand_profile(self, brand_id: str) -> str:
         brand.status = BrandStatus.READY
         db.commit()
     return "ok"
+
+
+# -----------------------------------------------------------------------------
+# Scheduled content publish (content calendar closing the loop: due_at +
+# a pre-configured scheduled_publish target auto-publishes without a manual
+# click). Same "sweep + fan out" shape as sync_connected_analytics_connectors.
+# -----------------------------------------------------------------------------
+def _sweep_due_content(db) -> list:
+    """Query logic isolated from the Celery task + its module-level engine,
+    so tests can pass in the test session directly (mirrors
+    app.core.orchestrator.execute_run's db-argument shape)."""
+    now = datetime.now(timezone.utc).isoformat()
+    return (
+        db.query(ContentPiece.id)
+        .filter(
+            ContentPiece.status == ContentStatus.APPROVED,
+            ContentPiece.is_deleted.is_(False),
+            ContentPiece.metadata_json["due_at"].astext <= now,
+            ContentPiece.metadata_json["scheduled_publish"].isnot(None),
+        )
+        .all()
+    )
+
+
+@celery.task(name="app.workers.tasks.publish_due_content")
+def publish_due_content() -> str:
+    with _SyncSession() as db:
+        candidates = _sweep_due_content(db)
+    for (cp_id,) in candidates:
+        publish_scheduled_content_piece.delay(str(cp_id))
+    return f"queued:{len(candidates)}"
+
+
+def _resolve_github_token_sync(db, tenant_id: UUID) -> str | None:
+    credential = (
+        db.query(GitHubCredential)
+        .filter(
+            GitHubCredential.tenant_id == tenant_id,
+            GitHubCredential.is_deleted.is_(False),
+        )
+        .order_by(GitHubCredential.updated_at.desc())
+        .first()
+    )
+    if credential:
+        try:
+            return decrypt_secret(credential.token_encrypted)
+        except CredentialCryptoError:
+            return None
+    return settings.GITHUB_TOKEN or None
+
+
+def _render_scheduled_markdown(cp: ContentPiece) -> str:
+    """Same frontmatter shape as app.routers.content._render_markdown —
+    duplicated rather than imported (that helper lives in an async-router
+    module with FastAPI-only deps; both are pure functions over a
+    ContentPiece with no I/O, and the router version is what a manual
+    /publish call renders, so keeping them in obvious lockstep in one
+    review is safer than an import that couples a worker to a router
+    module's import graph for a handful of lines)."""
+
+    def esc(v: str) -> str:
+        return str(v).replace("\\", "\\\\").replace('"', '\\"')
+
+    article = ((cp.metadata_json or {}).get("article")) or {}
+    date = cp.created_at.date().isoformat()
+    lines = ["---", f'title: "{esc(cp.title)}"']
+    if (cp.format or "") == "blog_post":
+        slug = re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9 _/-]", "", cp.title.lower()))
+        slug = slug.replace(" ", "-").replace("_", "-").replace("/", "-").strip("-")
+        slug = (article.get("slug") or slug) or "untitled"
+        description = article.get("description") or ""
+        tags = article.get("tags") or []
+        lines += [
+            f"slug: {slug}",
+            f"date: {date}",
+            f'description: "{esc(description)}"',
+            "tags: [" + ", ".join(f'"{esc(t)}"' for t in tags) + "]",
+            "draft: false",  # only APPROVED pieces reach this task
+        ]
+    else:
+        lines.append(f"date: {date}")
+    lines += ["---", "", ""]
+    return "\n".join(lines) + (cp.body or "")
+
+
+def _publish_scheduled_content_piece(db, content_piece_id: str) -> str:
+    """Core logic, isolated from the Celery task wrapper so tests can pass
+    in the test session directly (same split as _sweep_due_content above)."""
+    cp = db.get(ContentPiece, UUID(content_piece_id))
+    if not cp or cp.is_deleted:
+        return "missing"
+    if cp.status != ContentStatus.APPROVED:
+        return "skipped:not_approved"  # edited/transitioned since the sweep
+    scheduled = (cp.metadata_json or {}).get("scheduled_publish")
+    if not scheduled:
+        return "skipped:not_scheduled"  # cleared since the sweep
+
+    channel = scheduled["channel"]
+    config = scheduled.get("config") or {}
+    body = _render_scheduled_markdown(cp)
+
+    try:
+        channel_enum = PublicationChannel(channel)
+    except ValueError:
+        return f"failed:unknown_channel:{channel}"
+
+    pub = Publication(
+        tenant_id=cp.tenant_id,
+        owner_id=cp.owner_id,
+        content_piece_id=cp.id,
+        channel=channel_enum,
+        status=PublicationStatus.PUBLISHING,
+        target={"channel": channel},
+    )
+    db.add(pub)
+    db.commit()
+    db.refresh(pub)
+
+    try:
+        if channel == "GITHUB_PR":
+            token = _resolve_github_token_sync(db, cp.tenant_id)
+            if not token:
+                raise PublisherError("GitHub publishing not configured")
+            from app.core.github_publisher import publish_markdown
+
+            path = config.get("path") or f"content/{cp.id}.md"
+            branch = config.get("branch") or f"opengrow/{cp.id}"
+            result = _run(
+                publish_markdown(
+                    repo=config["repo"],
+                    path=path,
+                    content=body,
+                    branch=branch,
+                    commit_message=config.get("commit_message")
+                    or f"content: {cp.title}",
+                    pr_title=config.get("pr_title") or cp.title,
+                    pr_body=config.get("pr_body")
+                    or f"Published via OpenGrow — content piece {cp.id}.",
+                    base_branch=config.get("base_branch"),
+                    token=token,
+                    draft=config.get("draft", False),
+                    labels=config.get("labels"),
+                    reviewers=config.get("reviewers"),
+                )
+            )
+            pub.status = PublicationStatus.PR_OPENED
+            pub.url = result["pr_url"]
+            pub.external_ref = f"PR #{result['pr_number']} ({result['branch']})"
+        else:
+            adapter = get_adapter(channel)
+            if adapter is None:
+                raise PublisherError(f"{channel} publishing not implemented")
+            result = _run(adapter.publish(title=cp.title, body=body, config=config))
+            pub.status = PublicationStatus.PUBLISHED
+            pub.url = result["url"]
+            pub.external_ref = result["external_ref"]
+    except (PublisherError, GitHubPublishError, KeyError) as e:
+        pub.status = PublicationStatus.FAILED
+        pub.error_message = str(e)[:500]
+        db.commit()
+        return f"failed:{e.__class__.__name__}"
+
+    cp.status = ContentStatus.PUBLISHED
+    db.commit()
+    record_usage_sync(
+        db,
+        tenant_id=cp.tenant_id,
+        kind="publish",
+        ref_type="publication",
+        ref_id=str(pub.id),
+        details={"channel": channel, "scheduled": True},
+    )
+    return "ok"
+
+
+@celery.task(
+    bind=True,
+    name="app.workers.tasks.publish_scheduled_content_piece",
+    max_retries=2,
+    default_retry_delay=60,
+)
+def publish_scheduled_content_piece(self, content_piece_id: str) -> str:
+    with _SyncSession() as db:
+        return _publish_scheduled_content_piece(db, content_piece_id)
