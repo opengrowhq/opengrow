@@ -350,7 +350,27 @@ def _seed_article_run(
     return run
 
 
-def _fake_article_llm(monkeypatch, fail_on_kind=None):
+_GOOD_DRAFT = (
+    "## Intro\n"
+    "Compounding is one of the most powerful forces in personal finance, and "
+    "understanding compounding early changes how you plan for the long run. "
+    "This guide walks through why compounding matters and how to use it.\n\n"
+    "## Body\n"
+    "Small, consistent contributions compound over time into large outcomes. "
+    "The earlier you start, the more time compounding has to work in your favor, "
+    "and even modest amounts add up meaningfully across a couple of decades."
+)
+
+
+def _fake_article_llm(monkeypatch, fail_on_kind=None, draft_text=_GOOD_DRAFT):
+    """draft_text defaults to a fixture that clears the quality gate
+    (keyword/heading coverage, length, readability) so existing pipeline
+    tests exercise promote/publish rather than the gate itself — see the
+    dedicated test_execute_run_score_gate_* tests below for gate behavior.
+
+    The draft "follows" whatever outline it's given (mirrors each section's
+    heading into the draft) so a test that edits the approved outline still
+    gets a draft whose headings match it, same as a real LLM would."""
     calls = []
 
     def fake(db, gen, model):
@@ -360,7 +380,13 @@ def _fake_article_llm(monkeypatch, fail_on_kind=None):
             raise RuntimeError(f"llm down during {kind}")
         if kind == "article_outline":
             return "## Intro\n- hook\n\n## Body\n- point"
-        return "# Draft body"
+        outline = (gen.metadata_json or {}).get("outline") or []
+        if outline:
+            body = "\n\n".join(
+                f"## {s['heading']}\n{draft_text}" for s in outline
+            )
+            return body
+        return draft_text
 
     monkeypatch.setattr(orchestrator, "_generate_article", fake)
     return calls
@@ -411,7 +437,7 @@ def test_article_run_pauses_then_completes_after_approval(sync_db, monkeypatch):
     cp = sync_db.get(ContentPiece, run.content_piece_id)
     assert cp.format == "blog_post"
     assert cp.status.value == "DRAFT"
-    assert cp.body == "# Draft body"
+    assert "## Edited" in cp.body  # draft followed the edited outline
     assert cp.metadata_json["article"]["slug"] == "compounding"
 
 
@@ -575,9 +601,10 @@ def _fake_chat_completion_for_article(fail_on_model_call=None):
             raise RuntimeError(f"llm down on call {calls['n']}")
         # First call is the outline, second is the draft — same shape works
         # for both since only build_generation_messages' prompt differs.
-        text = (
-            "## Intro\n- hook\n\n## Body\n- point" if calls["n"] == 1 else "# Draft body"
-        )
+        # The draft text must clear the quality gate (see _GOOD_DRAFT above)
+        # or these credit-math tests would get an unexpected extra retry
+        # generation and their `len(gens) == 2` assertions would break.
+        text = "## Intro\n- hook\n\n## Body\n- point" if calls["n"] == 1 else _GOOD_DRAFT
         return text, {
             "model": "gpt-4o-mini",
             "usage": {
@@ -661,3 +688,138 @@ def test_article_run_retry_after_failure_holds_its_own_credits_not_free_or_doubl
     # (not identical to balance_after_failure, proving the retry was
     # actually billed, not a free ride), and never went negative/wrong.
     assert 0 < tenant.credit_balance_cents <= balance_after_failure
+
+
+# ---- Quality gate: score → promote, score → retry-with-feedback, or fail --
+
+
+def test_execute_run_score_gate_promotes_a_good_draft(sync_db, monkeypatch):
+    _fake_article_llm(monkeypatch)
+    run = _seed_article_run(sync_db, pause=False)
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    assert run.status == OrchestratorRunStatus.COMPLETE
+    assert run.details["score"] >= orchestrator.settings.ARTICLE_SCORE_THRESHOLD
+    assert run.details["score_retries"] == 0
+    assert len(_generations(sync_db, run)) == 2  # no extra retry generation
+
+
+def test_execute_run_score_gate_retries_then_promotes(sync_db, monkeypatch):
+    """A low-scoring first draft is regenerated with feedback; the second
+    (good) draft passes and the run completes — exercising one full
+    retry loop within a single execute_run call, plus billing for both
+    the failed and the successful draft attempts."""
+    calls = {"n": 0}
+
+    def fake(db, gen, model):
+        kind = (gen.metadata_json or {}).get("kind")
+        if kind == "article_outline":
+            return "## Intro\n- hook\n\n## Body\n- point"
+        calls["n"] += 1
+        return "bad" if calls["n"] == 1 else _GOOD_DRAFT
+
+    monkeypatch.setattr(orchestrator, "_generate_article", fake)
+    run = _seed_article_run(sync_db, pause=False)
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    assert run.status == OrchestratorRunStatus.COMPLETE
+    assert run.details["score_retries"] == 1
+    assert calls["n"] == 2  # first bad draft, one regenerate
+
+    gens = _generations(sync_db, run)
+    assert len(gens) == 3  # outline + failed-gate draft + passing draft
+    kinds = [g.metadata_json["kind"] for g in gens]
+    assert kinds == ["article_outline", "article_draft", "article_draft"]
+    # feedback was folded into the retried brief's notes
+    assert gens[2].metadata_json["article"]["notes"]
+
+    cp = sync_db.get(ContentPiece, run.content_piece_id)
+    assert cp.body == _GOOD_DRAFT
+    assert cp.source_generation_id == gens[2].id  # the passing attempt, not the failed one
+
+
+def test_execute_run_score_gate_fails_after_max_retries(sync_db, monkeypatch):
+    monkeypatch.setattr(
+        orchestrator, "_generate_article", lambda db, gen, model: (
+            "## Intro\n- hook\n\n## Body\n- point"
+            if (gen.metadata_json or {}).get("kind") == "article_outline"
+            else "bad"
+        ),
+    )
+    run = _seed_article_run(sync_db, pause=False)
+
+    with pytest.raises(orchestrator.QualityGateFailed):
+        orchestrator.execute_run(sync_db, run.id)
+
+    sync_db.refresh(run)
+    assert run.status == OrchestratorRunStatus.FAILED
+    assert "scored" in run.error_message
+    assert run.details["score_retries"] == orchestrator.settings.ARTICLE_SCORE_MAX_RETRIES
+    # outline + one draft attempt per retry budget slot (initial + retries)
+    assert (
+        len(_generations(sync_db, run))
+        == 1 + orchestrator.settings.ARTICLE_SCORE_MAX_RETRIES + 1
+    )
+    # never promoted
+    assert run.content_piece_id is None
+
+
+def test_execute_run_score_gate_reentry_at_score_step(sync_db, monkeypatch):
+    """Simulates a crash between _step_draft committing step="score" and
+    _step_score running — execute_run must still run the gate, not skip
+    straight through to done."""
+    _fake_article_llm(monkeypatch)
+    run = _seed_article_run(sync_db, pause=False)
+    run.status = OrchestratorRunStatus.QUEUED
+    run.step = "outline"
+    sync_db.commit()
+
+    # Drive it manually up to right after the draft LLM call, mimicking a
+    # crash: force run.step to "score" with a draft already in details but
+    # never actually invoke _step_score.
+    from app.models.generation import Generation
+
+    outline_gen = Generation(
+        id=uuid4(),
+        tenant_id=run.tenant_id,
+        owner_id=run.user_id,
+        brief="Compounding",
+        status=GenerationStatus.COMPLETE,
+        metadata_json={"kind": "article_outline"},
+        result="## Intro\n- hook\n\n## Body\n- point",
+    )
+    draft_gen = Generation(
+        id=uuid4(),
+        tenant_id=run.tenant_id,
+        owner_id=run.user_id,
+        brief="Compounding",
+        status=GenerationStatus.COMPLETE,
+        metadata_json={"kind": "article_draft"},
+        result=_GOOD_DRAFT,
+    )
+    sync_db.add_all([outline_gen, draft_gen])
+    sync_db.commit()
+    run.details = {
+        "article": {"topic": "Compounding", "length_words": 800},
+        "pause_for_outline_approval": False,
+        "auto_approve": False,
+        "outline_gen_id": str(outline_gen.id),
+        "outline_text": outline_gen.result,
+        "sections": [{"heading": "Intro", "points": ["hook"]}],
+        "draft_gen_id": str(draft_gen.id),
+        "draft_text": draft_gen.result,
+    }
+    run.generation_id = draft_gen.id
+    run.step = "score"
+    sync_db.commit()
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    assert run.status == OrchestratorRunStatus.COMPLETE
+    assert "score" in run.details  # the gate actually ran, not skipped
+    assert run.content_piece_id is not None

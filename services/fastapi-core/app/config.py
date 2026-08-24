@@ -117,6 +117,14 @@ class Settings(BaseSettings):
     # Base URL the browser is served from — Checkout/Billing Portal redirect here.
     FRONTEND_BASE_URL: str = "http://localhost:3000"
 
+    # ---- Orchestrator article-pipeline quality gate ----
+    # A draft below this score (0.0-1.0, see app/core/quality_score.py) is
+    # regenerated with feedback instead of promoted, up to ARTICLE_SCORE_MAX_RETRIES
+    # times. v1 scores on-page signals only (keyword/heading coverage, length,
+    # readability) — no external SERP comparison (would need a paid search API).
+    ARTICLE_SCORE_THRESHOLD: float = 0.6
+    ARTICLE_SCORE_MAX_RETRIES: int = 2
+
     @property
     def is_lite(self) -> bool:
         return self.DEPLOYMENT_MODE == "lite"
