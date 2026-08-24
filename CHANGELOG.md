@@ -6,6 +6,41 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+**Generate**
+- Versioned playbooks (`/playbooks`): tenant-customizable system prompts for
+  outline/draft/generic-copy generation, falling back to a global then
+  built-in default. New versions are saved as new rows, never edited in
+  place.
+
+**Orchestrate**
+- Keyword research step: a bare topic gets a real primary/secondary keyword
+  set via no-API-key scraping (Google Autocomplete + Bing SERP/PAA) —
+  skipped automatically when a keyword is already supplied.
+- Quality gate: a draft that scores too low on keyword/heading coverage,
+  length, and readability is regenerated with feedback before it's ever
+  promoted, up to a fixed retry budget, rather than silently publishing a
+  weak draft.
+
+**Publish**
+- Content calendar scheduled auto-publish: set `due_at` +
+  `scheduled_publish: {channel, config}` on a content piece and an hourly
+  sweep publishes it automatically once it's approved and due, through the
+  same channel adapters as a manual publish.
+
+**Attribute**
+- Real backend attribution recommendations (`/analytics/recommendations`):
+  a daily sweep flags decaying published content to refresh and growing
+  content to double down on, computed from real trend data — replacing the
+  prior rule-based, client-side-only advisory panel.
+  `POST .../start-run` turns a recommendation directly into a new
+  orchestrator run, closing the content → attribution → next-content loop
+  for real.
+- Tenant-owned Stripe revenue sync (`/analytics/stripe/*`): connect your own
+  Stripe account (BYOK, separate from OpenGrow's own platform billing) so
+  `charge.succeeded` events attribute revenue back to content automatically.
+
 ## [0.1.0] — Pre-Alpha
 
 First public pre-alpha. The full growth loop — **context → content → publish →
