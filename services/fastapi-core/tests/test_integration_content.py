@@ -42,6 +42,38 @@ async def test_patch_updates_fields(client, tenant_factory):
     assert patched.json()["next_action"] == "review"  # trimmed by validator
 
 
+async def test_create_and_patch_scheduled_publish(client, tenant_factory):
+    acct = await tenant_factory()
+    h = acct["headers"]
+
+    created = await _create(
+        client,
+        h,
+        due_at="2026-09-01T00:00:00Z",
+        scheduled_publish={"channel": "GITHUB_PR", "config": {"repo": "acme/blog"}},
+    )
+    assert created.status_code == 201
+    cp = created.json()
+    assert cp["scheduled_publish"] == {
+        "channel": "GITHUB_PR",
+        "config": {"repo": "acme/blog"},
+    }
+
+    patched = await client.patch(
+        f"/content/{cp['id']}",
+        json={"scheduled_publish": {"channel": "SLACK", "config": {}}},
+        headers=h,
+    )
+    assert patched.json()["scheduled_publish"]["channel"] == "SLACK"
+
+    cleared = await client.patch(
+        f"/content/{cp['id']}",
+        json={"clear_scheduled_publish": True},
+        headers=h,
+    )
+    assert cleared.json()["scheduled_publish"] is None
+
+
 async def test_lifecycle_transitions_and_illegal_jump(client, tenant_factory):
     acct = await tenant_factory()
     h = acct["headers"]

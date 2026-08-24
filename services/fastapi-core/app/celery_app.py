@@ -24,6 +24,8 @@ celery.conf.update(
         "app.workers.tasks.run_orchestrator": {"queue": "gen_heavy"},
         "app.workers.tasks.sync_analytics_connector": {"queue": "cpu_light"},
         "app.workers.tasks.sync_connected_analytics_connectors": {"queue": "cpu_light"},
+        "app.workers.tasks.publish_due_content": {"queue": "cpu_light"},
+        "app.workers.tasks.publish_scheduled_content_piece": {"queue": "cpu_light"},
     },
     task_acks_late=True,
     task_reject_on_worker_lost=True,
@@ -39,6 +41,10 @@ celery.conf.update(
         "analytics-connectors-sync-daily": {
             "task": "app.workers.tasks.sync_connected_analytics_connectors",
             "schedule": crontab(hour=4, minute=0),
+        },
+        "content-calendar-publish-hourly": {
+            "task": "app.workers.tasks.publish_due_content",
+            "schedule": crontab(minute=0),
         },
     },
 )

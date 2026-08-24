@@ -42,6 +42,7 @@ from app.schemas.content_piece import (
     ContentPieceOut,
     ContentPieceTransition,
     ContentPieceUpdate,
+    ScheduledPublish,
 )
 from app.schemas.publication import (
     GitHubCredentialOut,
@@ -76,6 +77,7 @@ _EDITABLE = {ContentStatus.DRAFT, ContentStatus.IN_REVIEW}
 
 def _out(cp: ContentPiece) -> ContentPieceOut:
     metadata = cp.metadata_json or {}
+    scheduled = metadata.get("scheduled_publish")
     return ContentPieceOut(
         id=str(cp.id),
         title=cp.title,
@@ -87,6 +89,7 @@ def _out(cp: ContentPiece) -> ContentPieceOut:
         ),
         next_action=metadata.get("next_action"),
         due_at=metadata.get("due_at"),
+        scheduled_publish=ScheduledPublish(**scheduled) if scheduled else None,
         created_at=cp.created_at,
         updated_at=cp.updated_at,
     )
@@ -160,6 +163,8 @@ def _content_metadata(
     next_action: str | None = None,
     set_due_at: bool = False,
     due_at=None,
+    set_scheduled_publish: bool = False,
+    scheduled_publish=None,
 ) -> dict | None:
     metadata = dict(current or {})
     if set_next_action:
@@ -174,6 +179,11 @@ def _content_metadata(
             )
         else:
             metadata.pop("due_at", None)
+    if set_scheduled_publish:
+        if scheduled_publish:
+            metadata["scheduled_publish"] = scheduled_publish.model_dump()
+        else:
+            metadata.pop("scheduled_publish", None)
     return metadata or None
 
 
@@ -306,6 +316,8 @@ async def create_content(
             next_action=payload.next_action,
             set_due_at=payload.due_at is not None,
             due_at=payload.due_at,
+            set_scheduled_publish=payload.scheduled_publish is not None,
+            scheduled_publish=payload.scheduled_publish,
         ),
     )
     db.add(cp)
@@ -377,6 +389,8 @@ async def create_from_generation(
                 next_action=payload.next_action,
                 set_due_at=payload.due_at is not None,
                 due_at=payload.due_at,
+                set_scheduled_publish=payload.scheduled_publish is not None,
+                scheduled_publish=payload.scheduled_publish,
             ),
             (gen.metadata_json or {}).get("article"),
         ),
@@ -549,9 +563,14 @@ async def update_content(
         cp.body = payload.body
     if payload.format is not None:
         cp.format = payload.format
+    set_scheduled_publish = (
+        "scheduled_publish" in payload.model_fields_set
+        or payload.clear_scheduled_publish
+    )
     if (
         "next_action" in payload.model_fields_set
         or "due_at" in payload.model_fields_set
+        or set_scheduled_publish
     ):
         cp.metadata_json = _content_metadata(
             cp.metadata_json,
@@ -559,6 +578,10 @@ async def update_content(
             next_action=payload.next_action,
             set_due_at="due_at" in payload.model_fields_set,
             due_at=payload.due_at,
+            set_scheduled_publish=set_scheduled_publish,
+            scheduled_publish=(
+                None if payload.clear_scheduled_publish else payload.scheduled_publish
+            ),
         )
     await db.commit()
     await db.refresh(cp)
