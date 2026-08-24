@@ -97,6 +97,21 @@ def test_context_is_injected_within_budget():
     assert joined.count("s") <= 6000  # char_budget respected
 
 
+def test_outline_prompt_uses_system_template_override_when_given():
+    msgs = compose_outline_prompt(BRIEF, None, None, "CUSTOM PLAYBOOK RULES")
+    assert msgs[0]["content"].startswith("CUSTOM PLAYBOOK RULES")
+
+
+def test_draft_prompt_uses_system_template_override_when_given():
+    msgs = compose_draft_prompt(BRIEF, OUTLINE, None, None, "CUSTOM DRAFT RULES")
+    assert msgs[0]["content"].startswith("CUSTOM DRAFT RULES")
+
+
+def test_outline_prompt_falls_back_to_default_without_override():
+    msgs = compose_outline_prompt(BRIEF)
+    assert "senior content strategist" in msgs[0]["content"]
+
+
 def test_token_budgets():
     assert OUTLINE_MAX_TOKENS < 2000
     assert draft_max_tokens(1500) > 2000  # long-form needs more than the old default

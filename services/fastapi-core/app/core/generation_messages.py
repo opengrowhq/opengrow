@@ -16,19 +16,43 @@ def build_generation_messages(
     (never round-tripped through ``metadata_json``) so internal prompt inputs
     stay out of the persisted row.
     """
+    from sqlalchemy.orm import Session
+
     from app.core.article_prompt import (
         OUTLINE_MAX_TOKENS,
         compose_draft_prompt,
         compose_outline_prompt,
         draft_max_tokens,
     )
+    from app.core.playbook import get_active_system_template_sync
+    from app.models.playbook import PlaybookKind
 
     meta = gen.metadata_json or {}
     kind = meta.get("kind")
     brief = meta.get("article") or {}
 
+    # Playbook lookup needs a real DB round-trip, so it's only attempted from
+    # the sync `Session` worker/orchestrator contexts that actually make the
+    # LLM call — matches article_grounding.ground_article's same convention.
+    playbook_kind = None
     if kind == "article_outline":
-        return compose_outline_prompt(brief, brand, context), OUTLINE_MAX_TOKENS
+        playbook_kind = PlaybookKind.ARTICLE_OUTLINE
+    elif kind == "article_draft":
+        playbook_kind = PlaybookKind.ARTICLE_DRAFT
+    elif kind is None:
+        playbook_kind = PlaybookKind.GENERIC_COPY
+
+    system_template = None
+    if db is not None and isinstance(db, Session) and playbook_kind is not None:
+        system_template = get_active_system_template_sync(
+            db, gen.tenant_id, playbook_kind
+        )
+
+    if kind == "article_outline":
+        return (
+            compose_outline_prompt(brief, brand, context, system_template),
+            OUTLINE_MAX_TOKENS,
+        )
     if kind == "article_draft":
         outline = meta.get("outline") or []
         try:
@@ -36,7 +60,7 @@ def build_generation_messages(
         except (TypeError, ValueError):
             words = 1200
         return (
-            compose_draft_prompt(brief, outline, brand, context),
+            compose_draft_prompt(brief, outline, brand, context, system_template),
             draft_max_tokens(words),
         )
 
@@ -53,7 +77,8 @@ def build_generation_messages(
         [
             {
                 "role": "system",
-                "content": "You write concise, high-quality marketing copy.",
+                "content": system_template
+                or "You write concise, high-quality marketing copy.",
             },
             {"role": "user", "content": gen.brief + ref_hint},
         ],
