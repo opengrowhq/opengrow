@@ -6,6 +6,7 @@ import { SettingsIcon } from "@/components/illustrations";
 import { useAuthGuard } from "@/features/auth";
 import { BillingCard } from "@/features/billing";
 import { TeamCard } from "@/features/team";
+import { PlaybooksCard } from "@/features/playbooks";
 import { GitHubConnectionCard } from "./github-connection-card";
 
 export function SettingsPage() {
@@ -21,6 +22,7 @@ export function SettingsPage() {
         />
         <BillingCard />
         <TeamCard />
+        <PlaybooksCard />
         <GitHubConnectionCard />
       </main>
     </AppShell>
