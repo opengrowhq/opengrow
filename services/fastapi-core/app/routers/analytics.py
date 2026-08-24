@@ -2,9 +2,9 @@ import csv
 import io
 from datetime import datetime, timezone
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
-
+import stripe
 from fastapi import (
     APIRouter,
     Depends,
@@ -39,12 +39,15 @@ from app.models.analytics_connector import (
     AnalyticsConnectorProvider,
     AnalyticsConnectorStatus,
 )
+from app.core.audit import record_audit_event
+from app.core.credential_crypto import CredentialCryptoError, decrypt_secret, encrypt_secret
 from app.models.content_piece import ContentPiece
 from app.models.content_recommendation import (
     ContentRecommendation,
     ContentRecommendationStatus,
 )
 from app.models.tenant import Tenant
+from app.models.tenant_stripe import TenantStripeCredential, TenantStripeWebhookEvent
 from app.models.user import User
 from app.schemas.analytics import (
     AnalyticsConnectorAuthUrlOut,
@@ -69,6 +72,8 @@ from app.schemas.analytics import (
     RevenueEventOut,
     SourceAttributionOut,
     SourceTrendOut,
+    TenantStripeConfigOut,
+    TenantStripeCredentialUpsert,
     TrackingStatusOut,
 )
 from app.workers.tasks import sync_analytics_connector
@@ -1508,3 +1513,236 @@ async def start_run_from_recommendation(
     await db.commit()
     await db.refresh(rec)
     return _recommendation_out(rec)
+
+
+# -----------------------------------------------------------------------------
+# Tenant-owned Stripe revenue sync: a tenant's OWN Stripe account (their
+# downstream customers paying THEM), completely separate from OpenGrow's own
+# platform-billing Stripe account (app.routers.billing / STRIPE_SECRET_KEY).
+# BYOK, mirrors app.routers.content's GitHub credential connect/disconnect
+# pattern; webhook signature verification mirrors app.routers.billing's
+# stripe_webhook, but scoped per tenant since each tenant has their own
+# webhook secret (no single settings.STRIPE_WEBHOOK_SECRET can verify it).
+# -----------------------------------------------------------------------------
+async def _load_tenant_stripe_credential(
+    db: AsyncSession, tenant_id: UUID
+) -> TenantStripeCredential | None:
+    return await db.scalar(
+        select(TenantStripeCredential).where(
+            TenantStripeCredential.tenant_id == tenant_id,
+            TenantStripeCredential.is_deleted.is_(False),
+        )
+    )
+
+
+@router.get("/stripe/config", response_model=TenantStripeConfigOut)
+async def tenant_stripe_config(
+    request: Request,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    await _assert_tenant_reader(current)
+    credential = await _load_tenant_stripe_credential(db, current.tenant_id)
+    if credential is None:
+        return TenantStripeConfigOut(configured=False)
+    webhook_url = str(
+        request.url_for("tenant_stripe_webhook", tenant_id=str(current.tenant_id))
+    )
+    return TenantStripeConfigOut(
+        configured=True,
+        secret_key_last4=credential.secret_key_last4,
+        display_name=credential.display_name,
+        webhook_url=webhook_url,
+    )
+
+
+@router.post(
+    "/stripe/credentials",
+    response_model=TenantStripeConfigOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upsert_tenant_stripe_credential(
+    payload: TenantStripeCredentialUpsert,
+    request: Request,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    await _assert_tenant_writer(current)
+    try:
+        stripe.StripeClient(payload.secret_key).v1.balance.retrieve()
+    except stripe.AuthenticationError as e:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"Stripe rejected the secret key: {e}"
+        ) from e
+    except stripe.StripeError as e:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"Could not reach Stripe: {e}"
+        ) from e
+
+    try:
+        secret_key_encrypted = encrypt_secret(payload.secret_key)
+        webhook_secret_encrypted = encrypt_secret(payload.webhook_secret)
+    except CredentialCryptoError as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
+
+    credential = await _load_tenant_stripe_credential(db, current.tenant_id)
+    if credential is None:
+        credential = TenantStripeCredential(
+            tenant_id=current.tenant_id,
+            owner_id=current.id,
+            secret_key_encrypted=secret_key_encrypted,
+            secret_key_last4=payload.secret_key[-4:],
+            webhook_secret_encrypted=webhook_secret_encrypted,
+            display_name=payload.display_name,
+        )
+        db.add(credential)
+    else:
+        credential.owner_id = current.id
+        credential.secret_key_encrypted = secret_key_encrypted
+        credential.secret_key_last4 = payload.secret_key[-4:]
+        credential.webhook_secret_encrypted = webhook_secret_encrypted
+        credential.display_name = payload.display_name
+    await record_audit_event(
+        db,
+        action="stripe_revenue.credentials.connected",
+        tenant_id=current.tenant_id,
+        actor_user_id=current.id,
+        actor_email=current.email,
+        details={"display_name": credential.display_name},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    await db.commit()
+    await db.refresh(credential)
+    webhook_url = str(
+        request.url_for("tenant_stripe_webhook", tenant_id=str(current.tenant_id))
+    )
+    return TenantStripeConfigOut(
+        configured=True,
+        secret_key_last4=credential.secret_key_last4,
+        display_name=credential.display_name,
+        webhook_url=webhook_url,
+    )
+
+
+@router.delete("/stripe/credentials", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_tenant_stripe_credential(
+    request: Request,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    await _assert_tenant_writer(current)
+    credential = await _load_tenant_stripe_credential(db, current.tenant_id)
+    if credential is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    credential.is_deleted = True
+    await record_audit_event(
+        db,
+        action="stripe_revenue.credentials.disconnected",
+        tenant_id=current.tenant_id,
+        actor_user_id=current.id,
+        actor_email=current.email,
+        details={},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _stripe_charge_to_revenue_event(
+    tenant_id: UUID, owner_id: UUID, charge: dict
+) -> RevenueEvent:
+    meta = charge.get("metadata") or {}
+    content_piece_id = None
+    if meta.get("content_piece_id"):
+        try:
+            content_piece_id = UUID(meta["content_piece_id"])
+        except ValueError:
+            content_piece_id = None
+    source_url = meta.get("source_url")
+    occurred_at = datetime.fromtimestamp(charge["created"], tz=timezone.utc)
+    channel = normalize_channel("stripe", source_url, meta.get("channel"))
+    dedupe_key = event_dedupe_key(
+        tenant_id=tenant_id,
+        provider="stripe",
+        event_type=RevenueEventType.REVENUE.value,
+        content_piece_id=content_piece_id,
+        source_url=source_url,
+        occurred_at=occurred_at,
+        external_id=charge["id"],
+    )
+    return RevenueEvent(
+        tenant_id=tenant_id,
+        owner_id=owner_id,
+        content_piece_id=content_piece_id,
+        event_type=RevenueEventType.REVENUE,
+        event_count=1,
+        amount_cents=charge["amount_received"],
+        currency=(charge.get("currency") or "usd").upper(),
+        provider="stripe",
+        channel=channel,
+        dedupe_key=dedupe_key,
+        source_url=source_url,
+        occurred_at=occurred_at,
+        metadata_json={"stripe_charge_id": charge["id"]},
+    )
+
+
+@router.post("/stripe/webhook/{tenant_id}", status_code=status.HTTP_200_OK)
+async def tenant_stripe_webhook(
+    tenant_id: UUID,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Unauthenticated by design (Stripe can't send a bearer token) — trust
+    comes entirely from the signature check against THIS tenant's stored
+    webhook_secret, mirrored from app.routers.billing.stripe_webhook. The
+    tenant_id in the path only selects which secret to verify against; it
+    grants nothing on its own."""
+    credential = await _load_tenant_stripe_credential(db, tenant_id)
+    if credential is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Stripe not connected")
+    try:
+        webhook_secret = decrypt_secret(credential.webhook_secret_encrypted)
+    except CredentialCryptoError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Stored webhook secret is unusable"
+        )
+
+    body = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    try:
+        event = stripe.Webhook.construct_event(body, sig_header, webhook_secret)
+    except (ValueError, stripe.SignatureVerificationError) as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid webhook: {e}") from e
+
+    existing = await db.scalar(
+        select(TenantStripeWebhookEvent).where(
+            TenantStripeWebhookEvent.tenant_id == tenant_id,
+            TenantStripeWebhookEvent.stripe_event_id == event["id"],
+        )
+    )
+    if existing:
+        return {"status": "already_processed"}
+
+    event_type = event["type"]
+    if event_type == "charge.succeeded":
+        charge = event["data"]["object"]
+        if charge.get("paid") and charge.get("amount_received", 0) > 0:
+            db.add(
+                _stripe_charge_to_revenue_event(tenant_id, credential.owner_id, charge)
+            )
+
+    db.add(
+        TenantStripeWebhookEvent(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            stripe_event_id=event["id"],
+            event_type=event_type,
+            payload=event.to_dict_recursive(),
+            processed_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
+    return {"status": "processed"}
