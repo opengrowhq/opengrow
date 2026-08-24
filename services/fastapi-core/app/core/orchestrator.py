@@ -4,12 +4,14 @@ Two pipelines share the `execute_run` entry point:
 
 - **Legacy generic copy** (no `details["article"]`): generate → promote →
   optional publish, exactly the pre-design-C behavior.
-- **Article pipeline** (`details["article"]` set): outline → optional human
-  pause (`AWAITING_OUTLINE_APPROVAL`) → draft → score → promote → guarded
-  publish. The score step is a quality gate (see app.core.quality_score): a
-  draft below ARTICLE_SCORE_THRESHOLD is regenerated with feedback, up to
-  ARTICLE_SCORE_MAX_RETRIES times, before the run fails outright — nothing
-  reaches promote/publish without clearing the bar.
+- **Article pipeline** (`details["article"]` set): keyword_research (only if
+  no primary_keyword was supplied — see app.core.keyword_research) →
+  outline → optional human pause (`AWAITING_OUTLINE_APPROVAL`) → draft →
+  score → promote → guarded publish. The score step is a quality gate (see
+  app.core.quality_score): a draft below ARTICLE_SCORE_THRESHOLD is
+  regenerated with feedback, up to ARTICLE_SCORE_MAX_RETRIES times, before
+  the run fails outright — nothing reaches promote/publish without clearing
+  the bar.
 
 `execute_run` dispatches on `run.step` and every step is idempotent (work
 already recorded in `run.details` is not repeated), so a run is safe to
@@ -33,6 +35,7 @@ from app.core.credits import (
     real_generation_cost_cents,
 )
 from app.core.generation_messages import build_generation_messages
+from app.core.keyword_research import research_keywords
 from app.core.litellm_client import chat_completion
 from app.core.publishers import PublisherError, get_adapter
 from app.core.quality_score import feedback_for_retry, score_draft
@@ -245,6 +248,40 @@ def _finish_article_generation(db: Session, gen: Generation, model: str) -> str:
     gen.status = GenerationStatus.COMPLETE
     db.commit()
     return text
+
+
+def _step_keyword_research(db: Session, run: OrchestratorRun) -> None:
+    """Real pipeline entrypoint (Phase 3): if the caller didn't already
+    supply a primary_keyword, research one from the bare topic via
+    no-API-key scraping (Google Autocomplete + Bing SERP/PAA — see
+    app.core.keyword_research) before outline generation runs.
+
+    Explicit opt-out preserved: a caller that already knows its keyword
+    (article["primary_keyword"] set) skips this step entirely — zero
+    behavior change for existing callers. No LLM call, no billing hold
+    (mirrors article_grounding.ground_article's best-effort, unbilled
+    external-lookup pattern) — a failed/empty research result still lets
+    the run proceed with the bare topic rather than blocking the pipeline
+    on Google/Bing being unreachable or having changed their markup.
+    """
+    details = dict(run.details or {})
+    run.step = "keyword_research"
+    db.commit()
+
+    article = dict(details.get("article") or {})
+    if not article.get("primary_keyword") and not details.get("keyword_research"):
+        result = research_keywords(article.get("topic") or run.brief)
+        article["primary_keyword"] = result["primary_keyword"]
+        existing_secondary = article.get("secondary_keywords") or []
+        article["secondary_keywords"] = list(
+            dict.fromkeys([*existing_secondary, *result["secondary_keywords"]])
+        )
+        details = {**details, "article": article, "keyword_research": result}
+        run.details = details
+        db.commit()
+
+    run.step = "outline"
+    db.commit()
 
 
 def _step_outline(db: Session, run: OrchestratorRun) -> None:
@@ -480,7 +517,9 @@ def execute_run(db: Session, run_id: UUID | str) -> str:
         return _execute_legacy_run(db, run)
 
     try:
-        if run.step in (None, "outline"):
+        if run.step in (None, "keyword_research"):
+            _step_keyword_research(db, run)
+        if run.step == "outline":
             _step_outline(db, run)
         if run.step == "await_outline":
             return "awaiting-outline-approval"
