@@ -337,6 +337,10 @@ def _seed_article_run(
     run.details = {
         "article": {
             "topic": "Compounding",
+            # Explicit keyword: skips the keyword_research step (which would
+            # otherwise make a real outbound HTTP call) — see the dedicated
+            # test_execute_run_keyword_research_* tests below for that step.
+            "primary_keyword": "compounding",
             "length_words": 800,
             "slug": "compounding",
             "tags": ["seo"],
@@ -593,18 +597,23 @@ def test_legacy_run_free_tenant_is_not_credit_gated(sync_db, monkeypatch):
 
 
 def _fake_chat_completion_for_article(fail_on_model_call=None):
+    """Distinguishes outline vs. draft by the system prompt content, not by
+    call count — a naive counter breaks across execute_run re-entries when a
+    fresh fake (its own counter starting at 0) is installed mid-test, which
+    would silently score the outline text as if it were the draft once the
+    quality gate started actually reading draft_text."""
     calls = {"n": 0}
 
     async def _fake(**kwargs):
         calls["n"] += 1
         if fail_on_model_call == calls["n"]:
             raise RuntimeError(f"llm down on call {calls['n']}")
-        # First call is the outline, second is the draft — same shape works
-        # for both since only build_generation_messages' prompt differs.
+        system = (kwargs.get("messages") or [{}])[0].get("content", "")
+        is_outline = "content strategist" in system  # see _OUTLINE_SYSTEM
         # The draft text must clear the quality gate (see _GOOD_DRAFT above)
         # or these credit-math tests would get an unexpected extra retry
         # generation and their `len(gens) == 2` assertions would break.
-        text = "## Intro\n- hook\n\n## Body\n- point" if calls["n"] == 1 else _GOOD_DRAFT
+        text = "## Intro\n- hook\n\n## Body\n- point" if is_outline else _GOOD_DRAFT
         return text, {
             "model": "gpt-4o-mini",
             "usage": {
@@ -823,3 +832,104 @@ def test_execute_run_score_gate_reentry_at_score_step(sync_db, monkeypatch):
     assert run.status == OrchestratorRunStatus.COMPLETE
     assert "score" in run.details  # the gate actually ran, not skipped
     assert run.content_piece_id is not None
+
+
+# ---- Keyword research: real pipeline entrypoint (Phase 3) ------------------
+
+
+def _seed_article_run_no_keyword(sync_db, **kwargs):
+    """Like _seed_article_run but WITHOUT a primary_keyword, so the new
+    keyword_research step actually fires instead of being skipped."""
+    run = _seed_article_run(sync_db, **kwargs)
+    article = dict(run.details["article"])
+    article.pop("primary_keyword", None)
+    run.details = {**run.details, "article": article}
+    sync_db.commit()
+    return run
+
+
+def test_execute_run_skips_keyword_research_when_keyword_already_set(
+    sync_db, monkeypatch
+):
+    """The common/default case: a caller that already knows its keyword
+    never triggers a network call — zero behavior change from before this
+    step existed."""
+    called = {"n": 0}
+
+    def fake_research(topic):
+        called["n"] += 1
+        return {"primary_keyword": "x", "secondary_keywords": [], "questions": []}
+
+    monkeypatch.setattr(orchestrator, "research_keywords", fake_research)
+    _fake_article_llm(monkeypatch)
+    run = _seed_article_run(sync_db, pause=False)  # has primary_keyword="compounding"
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+    assert called["n"] == 0
+
+
+def test_execute_run_researches_keyword_when_blank(sync_db, monkeypatch):
+    def fake_research(topic):
+        assert topic == "Compounding"
+        return {
+            "primary_keyword": "compounding",
+            "secondary_keywords": ["compound growth"],
+            "questions": ["How does compounding work?"],
+            "sources": {},
+        }
+
+    monkeypatch.setattr(orchestrator, "research_keywords", fake_research)
+    _fake_article_llm(monkeypatch)
+    run = _seed_article_run_no_keyword(sync_db, pause=False)
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    assert run.details["article"]["primary_keyword"] == "compounding"
+    assert "compound growth" in run.details["article"]["secondary_keywords"]
+    assert run.details["keyword_research"]["primary_keyword"] == "compounding"
+
+
+def test_execute_run_keyword_research_is_idempotent_on_reentry(sync_db, monkeypatch):
+    calls = {"n": 0}
+
+    def fake_research(topic):
+        calls["n"] += 1
+        return {
+            "primary_keyword": "compounding",
+            "secondary_keywords": [],
+            "questions": [],
+        }
+
+    monkeypatch.setattr(orchestrator, "research_keywords", fake_research)
+    _fake_article_llm(monkeypatch, fail_on_kind="article_outline")
+    run = _seed_article_run_no_keyword(sync_db, pause=False)
+
+    with pytest.raises(RuntimeError):
+        orchestrator.execute_run(sync_db, run.id)
+
+    assert calls["n"] == 1  # research already ran before the outline failed
+
+    _fake_article_llm(monkeypatch)  # fix the LLM, re-enter
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+    assert calls["n"] == 1  # not re-run on retry — keyword_research already present
+
+
+def test_execute_run_keyword_research_failure_falls_back_to_topic(sync_db, monkeypatch):
+    """Best-effort: if every scraping source fails, the run must still
+    proceed (with primary_keyword defaulted to the bare topic) rather than
+    blocking the pipeline on Google/Bing being unreachable. Exercises the
+    real research_keywords()'s own internal try/except (not a fake that
+    bypasses it), by breaking its actual HTTP dependency instead."""
+
+    def boom(*a, **k):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("app.core.keyword_research.fetch_url", boom)
+    _fake_article_llm(monkeypatch)
+    run = _seed_article_run_no_keyword(sync_db, pause=False)
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    assert run.details["article"]["primary_keyword"] == "Compounding"  # falls back to topic
