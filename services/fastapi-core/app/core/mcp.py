@@ -158,6 +158,68 @@ TOOLS: list[dict] = [
             "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
         },
     },
+    {
+        "name": "list_analytics_connectors",
+        "description": (
+            "List the workspace's analytics connectors (GA4, GSC, Stripe) "
+            "and their connection status. OAuth connect flows must be "
+            "completed in the app UI; this tool is read-only plus sync."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "sync_analytics_connector",
+        "description": (
+            "Queue an on-demand sync for an already-connected analytics "
+            "connector. The connector must be CONNECTED (finish OAuth in "
+            "the app UI first) — returns a task id, does not wait for "
+            "completion."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"connector_id": {"type": "string"}},
+            "required": ["connector_id"],
+        },
+    },
+    {
+        "name": "list_recommendations",
+        "description": (
+            "List content recommendations (REFRESH for decaying published "
+            "content, DOUBLE_DOWN for growing content) computed daily from "
+            "real trend data. Defaults to PENDING; pass status to filter."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "PENDING, DISMISSED, or ACTIONED. Defaults to PENDING.",
+                }
+            },
+        },
+    },
+    {
+        "name": "dismiss_recommendation",
+        "description": "Dismiss a pending content recommendation without acting on it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"recommendation_id": {"type": "string"}},
+            "required": ["recommendation_id"],
+        },
+    },
+    {
+        "name": "start_run_from_recommendation",
+        "description": (
+            "Turn a pending recommendation directly into a new orchestrator "
+            "run — the attribution loop's feedback step. Runs async, same "
+            "as create_orchestrator_run."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"recommendation_id": {"type": "string"}},
+            "required": ["recommendation_id"],
+        },
+    },
 ]
 
 
@@ -415,6 +477,69 @@ async def _list_publications(db: AsyncSession, user: User, args: dict) -> dict:
     }
 
 
+async def _list_analytics_connectors(db: AsyncSession, user: User, args: dict) -> dict:
+    from app.routers.analytics import list_connectors
+
+    connectors = await list_connectors(user, db)
+    return {"items": [c.model_dump() for c in connectors]}
+
+
+async def _sync_analytics_connector(db: AsyncSession, user: User, args: dict) -> dict:
+    from app.routers.analytics import sync_connector
+
+    connector_id = (args.get("connector_id") or "").strip()
+    if not connector_id:
+        raise ValueError("connector_id is required")
+    try:
+        connector_uuid = UUID(connector_id)
+    except ValueError:
+        raise ValueError(f"Invalid connector_id: {connector_id}")
+
+    out = await sync_connector(connector_uuid, user, db)
+    return out.model_dump()
+
+
+async def _list_recommendations(db: AsyncSession, user: User, args: dict) -> dict:
+    from app.routers.analytics import list_recommendations
+
+    recs = await list_recommendations(
+        user, db, status_filter=args.get("status", "PENDING")
+    )
+    return {"items": [r.model_dump() for r in recs]}
+
+
+async def _dismiss_recommendation(db: AsyncSession, user: User, args: dict) -> dict:
+    from app.routers.analytics import dismiss_recommendation
+
+    rec_id = (args.get("recommendation_id") or "").strip()
+    if not rec_id:
+        raise ValueError("recommendation_id is required")
+    try:
+        rec_uuid = UUID(rec_id)
+    except ValueError:
+        raise ValueError(f"Invalid recommendation_id: {rec_id}")
+
+    out = await dismiss_recommendation(rec_uuid, user, db)
+    return out.model_dump()
+
+
+async def _start_run_from_recommendation(
+    db: AsyncSession, user: User, args: dict
+) -> dict:
+    from app.routers.analytics import start_run_from_recommendation
+
+    rec_id = (args.get("recommendation_id") or "").strip()
+    if not rec_id:
+        raise ValueError("recommendation_id is required")
+    try:
+        rec_uuid = UUID(rec_id)
+    except ValueError:
+        raise ValueError(f"Invalid recommendation_id: {rec_id}")
+
+    out = await start_run_from_recommendation(rec_uuid, user, db)
+    return out.model_dump()
+
+
 _HANDLERS = {
     "list_content": _list_content,
     "create_content": _create_content,
@@ -428,6 +553,11 @@ _HANDLERS = {
     "get_orchestrator_run": _get_orchestrator_run,
     "create_orchestrator_run": _create_orchestrator_run,
     "list_publications": _list_publications,
+    "list_analytics_connectors": _list_analytics_connectors,
+    "sync_analytics_connector": _sync_analytics_connector,
+    "list_recommendations": _list_recommendations,
+    "dismiss_recommendation": _dismiss_recommendation,
+    "start_run_from_recommendation": _start_run_from_recommendation,
 }
 
 
@@ -493,7 +623,10 @@ async def handle_jsonrpc(payload: dict, db: AsyncSession, user: User) -> dict | 
             )
         return _result(
             request_id,
-            {"content": [{"type": "text", "text": json.dumps(data)}], "isError": False},
+            {
+                "content": [{"type": "text", "text": json.dumps(data, default=str)}],
+                "isError": False,
+            },
         )
 
     return _error(request_id, -32601, f"Method not found: {method}")

@@ -1,8 +1,12 @@
 """Integration tests for the MCP JSON-RPC endpoint (agent-facing tools)."""
 
 import json
+import uuid
 
 import pytest
+
+from app.models.analytics_connector import AnalyticsConnectorStatus
+from app.models.content_recommendation import ContentRecommendation
 
 
 async def _key_headers(client, tenant_factory):
@@ -72,6 +76,11 @@ async def test_initialize_and_tools_list(client, tenant_factory):
         "get_orchestrator_run",
         "create_orchestrator_run",
         "list_publications",
+        "list_analytics_connectors",
+        "sync_analytics_connector",
+        "list_recommendations",
+        "dismiss_recommendation",
+        "start_run_from_recommendation",
     } <= names
 
 
@@ -314,7 +323,10 @@ async def test_tools_call_creates_and_lists_generations(
             "jsonrpc": "2.0",
             "id": 22,
             "method": "tools/call",
-            "params": {"name": "get_generation", "arguments": {"generation_id": gen["id"]}},
+            "params": {
+                "name": "get_generation",
+                "arguments": {"generation_id": gen["id"]},
+            },
         },
         headers=headers,
     )
@@ -471,3 +483,224 @@ async def test_tools_call_lists_publications(client, tenant_factory):
     assert result["isError"] is False
     items = json.loads(result["content"][0]["text"])["items"]
     assert items == []
+
+
+# ---- Analytics connectors + recommendations ---------------------------
+
+
+async def test_tools_call_lists_analytics_connectors(
+    client, tenant_factory, allow_writer
+):
+    headers, acct = await _key_headers(client, tenant_factory)
+    created = await client.post(
+        "/analytics/connectors",
+        json={"provider": "ga4", "display_name": "GA", "external_property_id": "1"},
+        headers=acct["headers"],
+    )
+    assert created.status_code == 201
+    connector_id = created.json()["id"]
+
+    listed = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 31,
+            "method": "tools/call",
+            "params": {"name": "list_analytics_connectors", "arguments": {}},
+        },
+        headers=headers,
+    )
+    assert listed.status_code == 200
+    result = listed.json()["result"]
+    assert result["isError"] is False
+    items = json.loads(result["content"][0]["text"])["items"]
+    assert any(c["id"] == connector_id for c in items)
+
+
+async def test_sync_analytics_connector_requires_connected_status(
+    client, tenant_factory, allow_writer
+):
+    headers, acct = await _key_headers(client, tenant_factory)
+    created = await client.post(
+        "/analytics/connectors",
+        json={"provider": "ga4", "display_name": "GA", "external_property_id": "1"},
+        headers=acct["headers"],
+    )
+    connector_id = created.json()["id"]
+    assert created.json()["status"] == "NEEDS_AUTH"
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 32,
+            "method": "tools/call",
+            "params": {
+                "name": "sync_analytics_connector",
+                "arguments": {"connector_id": connector_id},
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_sync_analytics_connector_queues_task_once_connected(
+    client, db, tenant_factory, allow_writer, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.workers import tasks
+
+    monkeypatch.setattr(
+        tasks.sync_analytics_connector,
+        "delay",
+        lambda *a, **k: SimpleNamespace(id="sync-task"),
+    )
+
+    headers, acct = await _key_headers(client, tenant_factory)
+    created = await client.post(
+        "/analytics/connectors",
+        json={"provider": "ga4", "display_name": "GA", "external_property_id": "1"},
+        headers=acct["headers"],
+    )
+    connector_id = created.json()["id"]
+
+    from app.models.analytics_connector import AnalyticsConnector
+
+    row = await db.get(AnalyticsConnector, uuid.UUID(connector_id))
+    row.status = AnalyticsConnectorStatus.CONNECTED
+    await db.commit()
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 33,
+            "method": "tools/call",
+            "params": {
+                "name": "sync_analytics_connector",
+                "arguments": {"connector_id": connector_id},
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is False
+    body = json.loads(result["content"][0]["text"])
+    assert body["status"] == "QUEUED"
+    assert body["task_id"] == "sync-task"
+
+
+async def _seed_recommendation(db, tenant):
+    rec = ContentRecommendation(
+        id=uuid.uuid4(),
+        tenant_id=tenant.id,
+        kind="REFRESH",
+        content_piece_id=None,
+        title='Refresh "Old post"',
+        rationale="traffic dropped 80%",
+        score=0.8,
+    )
+    db.add(rec)
+    await db.commit()
+    await db.refresh(rec)
+    return rec
+
+
+async def test_tools_call_lists_recommendations(client, db, tenant_factory):
+    headers, acct = await _key_headers(client, tenant_factory)
+    rec = await _seed_recommendation(db, acct["tenant"])
+
+    listed = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 34,
+            "method": "tools/call",
+            "params": {"name": "list_recommendations", "arguments": {}},
+        },
+        headers=headers,
+    )
+    assert listed.status_code == 200
+    result = listed.json()["result"]
+    assert result["isError"] is False
+    items = json.loads(result["content"][0]["text"])["items"]
+    assert any(r["id"] == str(rec.id) for r in items)
+
+
+async def test_tools_call_dismisses_recommendation(
+    client, db, tenant_factory, allow_writer
+):
+    headers, acct = await _key_headers(client, tenant_factory)
+    rec = await _seed_recommendation(db, acct["tenant"])
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 35,
+            "method": "tools/call",
+            "params": {
+                "name": "dismiss_recommendation",
+                "arguments": {"recommendation_id": str(rec.id)},
+            },
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is False
+    body = json.loads(result["content"][0]["text"])
+    assert body["status"] == "DISMISSED"
+
+
+async def test_dismiss_recommendation_unknown_id_is_soft_error(
+    client, tenant_factory, allow_writer
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 36,
+            "method": "tools/call",
+            "params": {
+                "name": "dismiss_recommendation",
+                "arguments": {
+                    "recommendation_id": "00000000-0000-0000-0000-000000000000"
+                },
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_tools_call_starts_run_from_recommendation(
+    client, db, tenant_factory, allow_writer, no_celery
+):
+    headers, acct = await _key_headers(client, tenant_factory)
+    rec = await _seed_recommendation(db, acct["tenant"])
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 37,
+            "method": "tools/call",
+            "params": {
+                "name": "start_run_from_recommendation",
+                "arguments": {"recommendation_id": str(rec.id)},
+            },
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is False
+    body = json.loads(result["content"][0]["text"])
+    assert body["status"] == "ACTIONED"
+    assert body["orchestrator_run_id"]
