@@ -6,6 +6,18 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.config import settings
+
+# _StubAuthZClient.check() (app/core/authz.py) always returns True under
+# DEPLOYMENT_MODE=lite by design — there's no real OpenFGA to deny against.
+# A test relying on an unstubbed authz_client.check() denying a non-admin
+# can't see that denial in lite mode, including in CI (ci.yml runs
+# DEPLOYMENT_MODE: lite).
+requires_real_authz = pytest.mark.skipif(
+    settings.is_lite,
+    reason="authz_client.check() always allows under DEPLOYMENT_MODE=lite",
+)
+
 
 @pytest.fixture
 def allow_admin(monkeypatch):
@@ -270,6 +282,7 @@ async def _add_second_member(db, tenant_id):
     return user
 
 
+@requires_real_authz
 async def test_remove_member_requires_admin(client, tenant_factory):
     acct = await tenant_factory()
     other = await tenant_factory()

@@ -90,11 +90,15 @@ async def create_checkout(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     await _assert_tenant_admin(current)
-    price_id = _PRICE_IDS.get(payload.plan)
-    if not price_id:
+    if payload.plan not in _PRICE_IDS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown plan: {payload.plan}")
 
     client = _client()
+    price_id = _PRICE_IDS[payload.plan]
+    if not price_id:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not configured"
+        )
     tenant = await db.get(Tenant, current.tenant_id)
     customer_id = await _get_or_create_stripe_customer(db, client, tenant, current)
 
