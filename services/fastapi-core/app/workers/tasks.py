@@ -879,7 +879,14 @@ def _generate_recommendations_for_tenant(db, tenant_id: UUID) -> int:
         )
         .all()
     )
-    pieces = [{"id": cp.id, "title": cp.title} for cp in published]
+    pieces = [
+        {
+            "id": cp.id,
+            "title": cp.title,
+            "tags": ((cp.metadata_json or {}).get("article") or {}).get("tags"),
+        }
+        for cp in published
+    ]
     suggestions = build_recommendations(
         pieces, current_counts=current_counts, previous_counts=previous_counts
     )
@@ -887,6 +894,10 @@ def _generate_recommendations_for_tenant(db, tenant_id: UUID) -> int:
     # Skip a suggestion if an open (PENDING) one for the same piece+kind
     # already exists — the partial unique index would reject the insert
     # anyway, but checking first avoids a noisy IntegrityError per sweep.
+    # NEW_TOPIC has no content_piece_id (it's a tenant-wide gap, not a
+    # per-piece suggestion, so the DB constraint above deliberately excludes
+    # NULL content_piece_id rows from the unique index) — dedup those by
+    # title instead, since each gap's title encodes the specific tag.
     existing_pending = {
         (row.content_piece_id, row.kind)
         for row in db.query(
@@ -895,13 +906,26 @@ def _generate_recommendations_for_tenant(db, tenant_id: UUID) -> int:
             ContentRecommendation.tenant_id == tenant_id,
             ContentRecommendation.status == ContentRecommendationStatus.PENDING,
             ContentRecommendation.is_deleted.is_(False),
+            ContentRecommendation.content_piece_id.is_not(None),
+        )
+    }
+    existing_new_topic_titles = {
+        row.title
+        for row in db.query(ContentRecommendation.title).filter(
+            ContentRecommendation.tenant_id == tenant_id,
+            ContentRecommendation.status == ContentRecommendationStatus.PENDING,
+            ContentRecommendation.is_deleted.is_(False),
+            ContentRecommendation.kind == ContentRecommendationKind.NEW_TOPIC,
         )
     }
 
     created = 0
     for s in suggestions:
         kind = ContentRecommendationKind(s["kind"])
-        if (s["content_piece_id"], kind) in existing_pending:
+        if kind == ContentRecommendationKind.NEW_TOPIC:
+            if s["title"] in existing_new_topic_titles:
+                continue
+        elif (s["content_piece_id"], kind) in existing_pending:
             continue
         db.add(
             ContentRecommendation(

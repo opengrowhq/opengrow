@@ -15,6 +15,8 @@ from app.core.analytics_window import trend_delta
 DECAY_THRESHOLD_PERCENT = -30  # events dropped 30%+ vs. the prior window
 GROWTH_THRESHOLD_PERCENT = 50  # events grew 50%+ vs. the prior window
 MIN_EVENTS_FOR_SIGNAL = 3  # ignore noise from single-digit event counts
+MIN_PUBLISHED_FOR_GAP_SIGNAL = 3  # fewer tagged pieces = no real "coverage" yet
+MAX_NEW_TOPIC_SUGGESTIONS = 3  # cap per sweep — don't drown out real signals
 
 
 def _events_delta_percent(current: dict, previous: dict) -> int | None:
@@ -74,19 +76,66 @@ def new_topic_rationale(missing_tag: str, covered_tags: list[str]) -> str:
     )
 
 
+def find_topic_gaps(pieces: list[dict]) -> list[dict]:
+    """pieces: [{"id": UUID, "title": str, "tags": list[str] | None}, ...]
+    PUBLISHED pieces, same filtering contract as build_recommendations.
+
+    A "gap" here is a tag that shows up on exactly one published piece —
+    someone touched the topic once but never built it into a real cluster.
+    That's a much weaker, noisier signal than REFRESH/DOUBLE_DOWN's real
+    traffic deltas (no attribution data involved at all, just co-occurrence
+    of tags across a tenant's own published tags), so scores are capped
+    below any confirmed decay/growth score and the result is capped to
+    MAX_NEW_TOPIC_SUGGESTIONS — a tag that's simply rare isn't necessarily a
+    real content gap, and flooding the queue with them would drown out the
+    two evidence-backed kinds.
+
+    Requires MIN_PUBLISHED_FOR_GAP_SIGNAL published pieces with at least one
+    tag each; with too few tagged pieces "appears once" is meaningless (it's
+    just "hasn't had a second post yet", true of nearly every tag early on).
+    """
+    tagged = [p for p in pieces if p.get("tags")]
+    if len(tagged) < MIN_PUBLISHED_FOR_GAP_SIGNAL:
+        return []
+
+    tag_counts: dict[str, int] = {}
+    for piece in tagged:
+        for tag in piece["tags"]:
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    covered_tags = [t for t, count in tag_counts.items() if count > 1]
+    single_occurrence = sorted(t for t, count in tag_counts.items() if count == 1)
+
+    out: list[dict] = []
+    for tag in single_occurrence[:MAX_NEW_TOPIC_SUGGESTIONS]:
+        out.append(
+            {
+                "kind": "NEW_TOPIC",
+                "content_piece_id": None,
+                "title": f'Write more on "{tag}"',
+                "rationale": new_topic_rationale(tag, covered_tags),
+                # Below MIN_EVENTS decay/growth's minimum nonzero score
+                # (>0.3 for a decay right at DECAY_THRESHOLD_PERCENT) so a
+                # real, attribution-backed suggestion always sorts first.
+                "score": 0.2,
+            }
+        )
+    return out
+
+
 def build_recommendations(
     pieces: list[dict],
     *,
     current_counts: dict,
     previous_counts: dict,
 ) -> list[dict]:
-    """pieces: [{"id": UUID, "title": str, "status": str}, ...] — PUBLISHED
-    pieces only is the caller's job to filter (a DRAFT piece decaying isn't
-    meaningful). Returns a list of
+    """pieces: [{"id": UUID, "title": str, "tags": list[str] | None}, ...] —
+    PUBLISHED pieces only is the caller's job to filter (a DRAFT piece
+    decaying isn't meaningful; tags come from
+    ContentPiece.metadata_json["article"]["tags"]). Returns a list of
     {"kind", "content_piece_id", "title", "rationale", "score"} dicts, the
     caller turns these into ContentRecommendation rows.
     """
-    out: list[dict] = []
+    out: list[dict] = find_topic_gaps(pieces)
     for piece in pieces:
         cur = current_counts.get(piece["id"], {})
         prev = previous_counts.get(piece["id"], {})
@@ -98,7 +147,7 @@ def build_recommendations(
                 {
                     "kind": "REFRESH",
                     "content_piece_id": piece["id"],
-                    "title": f"Refresh \"{piece['title']}\"",
+                    "title": f'Refresh "{piece["title"]}"',
                     "rationale": refresh_rationale(
                         piece["title"], percent, cur.get("events", 0)
                     ),
@@ -113,7 +162,7 @@ def build_recommendations(
                 {
                     "kind": "DOUBLE_DOWN",
                     "content_piece_id": piece["id"],
-                    "title": f"Write a follow-up to \"{piece['title']}\"",
+                    "title": f'Write a follow-up to "{piece["title"]}"',
                     "rationale": double_down_rationale(
                         piece["title"], percent, cur.get("events", 0)
                     ),
