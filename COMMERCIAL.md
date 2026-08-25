@@ -52,4 +52,4 @@ It is not a paywall for core self-hosted functionality.
 - Agency: multiple client workspaces.
 - Enterprise: commercial license, private deployment guidance, security review, support SLA.
 
-For commercial licensing, contact `anaxagoras.kosta@gmail.com`.
+For commercial licensing, open a [GitHub Discussion](https://github.com/opengrowhq/opengrow/discussions).

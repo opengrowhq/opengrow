@@ -1,6 +1,26 @@
 """Integration tests for the MCP JSON-RPC endpoint (agent-facing tools)."""
 
 import json
+import uuid
+from uuid import UUID
+
+import pytest
+
+from app.config import settings
+from app.models.analytics_connector import AnalyticsConnectorStatus
+from app.models.content_recommendation import ContentRecommendation
+from app.models.orchestrator import OrchestratorRun, OrchestratorRunStatus
+
+# _StubAuthZClient.check() (app/core/authz.py) always returns True in
+# DEPLOYMENT_MODE=lite by design ("everything allowed, tenant isolation
+# still enforced in SQL") — there is no real OpenFGA to deny anything
+# against. A test that relies on an *unstubbed* authz_client.check() call
+# denying a permission can never see that denial in lite mode, including
+# in CI (.github/workflows/ci.yml runs DEPLOYMENT_MODE: lite).
+requires_real_authz = pytest.mark.skipif(
+    settings.is_lite,
+    reason="authz_client.check() always allows under DEPLOYMENT_MODE=lite",
+)
 
 
 async def _key_headers(client, tenant_factory):
@@ -9,6 +29,33 @@ async def _key_headers(client, tenant_factory):
         "/api-keys", json={"name": "mcp"}, headers=acct["headers"]
     )
     return {"X-API-Key": created.json()["key"]}, acct
+
+
+@pytest.fixture
+def allow_writer(monkeypatch):
+    """Stub authz — this repo's local dev environment has no OpenFGA store
+    configured, so authz.check()/bind_resource_to_tenant() always fail
+    closed here regardless of the real permission logic being tested."""
+    from app.core import authz
+
+    async def _allow(user_id: str, relation: str, object_id: str) -> bool:
+        return True
+
+    async def _noop(*args, **kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(authz.authz_client, "check", _allow)
+    monkeypatch.setattr(authz.authz_client, "bind_resource_to_tenant", _noop)
+
+
+@pytest.fixture
+def no_celery(monkeypatch):
+    from app.workers import tasks
+    from types import SimpleNamespace
+
+    stub = lambda *a, **k: SimpleNamespace(id="test-task")  # noqa: E731
+    monkeypatch.setattr(tasks.run_generation, "delay", stub)
+    monkeypatch.setattr(tasks.run_orchestrator, "delay", stub)
 
 
 async def test_initialize_and_tools_list(client, tenant_factory):
@@ -30,7 +77,27 @@ async def test_initialize_and_tools_list(client, tenant_factory):
         headers=headers,
     )
     names = {t["name"] for t in tools.json()["result"]["tools"]}
-    assert {"list_content", "create_content", "get_attribution_summary"} <= names
+    assert {
+        "list_content",
+        "create_content",
+        "get_attribution_summary",
+        "list_brands",
+        "transition_content",
+        "list_generations",
+        "get_generation",
+        "create_generation",
+        "list_orchestrator_runs",
+        "get_orchestrator_run",
+        "create_orchestrator_run",
+        "create_article_run",
+        "approve_article_outline",
+        "list_publications",
+        "list_analytics_connectors",
+        "sync_analytics_connector",
+        "list_recommendations",
+        "dismiss_recommendation",
+        "start_run_from_recommendation",
+    } <= names
 
 
 async def test_tools_call_creates_and_lists_content(client, tenant_factory):
@@ -83,6 +150,111 @@ async def test_tools_call_validation_error_is_soft(client, tenant_factory):
     assert result["isError"] is True
 
 
+async def test_tools_call_lists_brands(client, tenant_factory):
+    headers, _ = await _key_headers(client, tenant_factory)
+    listed = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {"name": "list_brands", "arguments": {}},
+        },
+        headers=headers,
+    )
+    assert listed.status_code == 200
+    result = listed.json()["result"]
+    assert result["isError"] is False
+    items = json.loads(result["content"][0]["text"])["items"]
+    assert items == []
+
+
+async def test_tools_call_transitions_content(client, tenant_factory):
+    headers, _ = await _key_headers(client, tenant_factory)
+    create = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {"name": "create_content", "arguments": {"title": "To review"}},
+        },
+        headers=headers,
+    )
+    content_id = json.loads(create.json()["result"]["content"][0]["text"])["id"]
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": {
+                "name": "transition_content",
+                "arguments": {"content_id": content_id, "status": "IN_REVIEW"},
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is False
+    updated = json.loads(result["content"][0]["text"])
+    assert updated["status"] == "IN_REVIEW"
+
+
+async def test_tools_call_rejects_illegal_transition(client, tenant_factory):
+    headers, _ = await _key_headers(client, tenant_factory)
+    create = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "tools/call",
+            "params": {"name": "create_content", "arguments": {"title": "Draft"}},
+        },
+        headers=headers,
+    )
+    content_id = json.loads(create.json()["result"]["content"][0]["text"])["id"]
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 14,
+            "method": "tools/call",
+            "params": {
+                "name": "transition_content",
+                "arguments": {"content_id": content_id, "status": "PUBLISHED"},
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_tools_call_transition_unknown_content_id(client, tenant_factory):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 15,
+            "method": "tools/call",
+            "params": {
+                "name": "transition_content",
+                "arguments": {
+                    "content_id": "00000000-0000-0000-0000-000000000000",
+                    "status": "IN_REVIEW",
+                },
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
 async def test_unknown_method_and_unknown_tool(client, tenant_factory):
     headers, _ = await _key_headers(client, tenant_factory)
     bad_method = await client.post(
@@ -118,3 +290,622 @@ async def test_mcp_requires_auth(client):
         "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"}
     )
     assert resp.status_code == 401
+
+
+# ---- Generations, orchestrator runs, publications ---------------------
+
+
+async def test_tools_call_creates_and_lists_generations(
+    client, tenant_factory, allow_writer, no_celery
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+
+    created = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "tools/call",
+            "params": {
+                "name": "create_generation",
+                "arguments": {"brief": "write a tweet"},
+            },
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200
+    result = created.json()["result"]
+    assert result["isError"] is False
+    gen = json.loads(result["content"][0]["text"])
+    assert gen["status"] == "QUEUED"
+    assert gen["brief"] == "write a tweet"
+
+    listed = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "tools/call",
+            "params": {"name": "list_generations", "arguments": {}},
+        },
+        headers=headers,
+    )
+    items = json.loads(listed.json()["result"]["content"][0]["text"])["items"]
+    assert any(i["id"] == gen["id"] for i in items)
+
+    fetched = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 22,
+            "method": "tools/call",
+            "params": {
+                "name": "get_generation",
+                "arguments": {"generation_id": gen["id"]},
+            },
+        },
+        headers=headers,
+    )
+    result = fetched.json()["result"]
+    assert result["isError"] is False
+    fetched_gen = json.loads(result["content"][0]["text"])
+    assert fetched_gen["id"] == gen["id"]
+
+
+async def test_create_generation_requires_brief(client, tenant_factory, allow_writer):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 23,
+            "method": "tools/call",
+            "params": {"name": "create_generation", "arguments": {}},
+        },
+        headers=headers,
+    )
+    assert call.json()["result"]["isError"] is True
+
+
+@requires_real_authz
+async def test_create_generation_surfaces_403_as_a_soft_tool_error(
+    client, tenant_factory
+):
+    """create_generation reuses the real REST handler, which raises
+    HTTPException (not ValueError) for permission failures — this must
+    still come back as a JSON-RPC tool error, not a raw HTTP failure."""
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 24,
+            "method": "tools/call",
+            "params": {"name": "create_generation", "arguments": {"brief": "x"}},
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_get_generation_unknown_id(client, tenant_factory):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 25,
+            "method": "tools/call",
+            "params": {
+                "name": "get_generation",
+                "arguments": {"generation_id": "00000000-0000-0000-0000-000000000000"},
+            },
+        },
+        headers=headers,
+    )
+    assert call.json()["result"]["isError"] is True
+
+
+async def test_tools_call_creates_and_lists_orchestrator_runs(
+    client, tenant_factory, allow_writer, no_celery
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+
+    created = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 26,
+            "method": "tools/call",
+            "params": {
+                "name": "create_orchestrator_run",
+                "arguments": {"brief": "write a launch post"},
+            },
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200
+    result = created.json()["result"]
+    assert result["isError"] is False
+    run = json.loads(result["content"][0]["text"])
+    assert run["status"] == "QUEUED"
+
+    listed = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 27,
+            "method": "tools/call",
+            "params": {"name": "list_orchestrator_runs", "arguments": {}},
+        },
+        headers=headers,
+    )
+    items = json.loads(listed.json()["result"]["content"][0]["text"])["items"]
+    assert any(i["run_id"] == run["run_id"] for i in items)
+
+    fetched = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 28,
+            "method": "tools/call",
+            "params": {
+                "name": "get_orchestrator_run",
+                "arguments": {"run_id": run["run_id"]},
+            },
+        },
+        headers=headers,
+    )
+    result = fetched.json()["result"]
+    assert result["isError"] is False
+    fetched_run = json.loads(result["content"][0]["text"])
+    assert fetched_run["run_id"] == run["run_id"]
+
+
+async def test_get_orchestrator_run_unknown_id(client, tenant_factory):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 29,
+            "method": "tools/call",
+            "params": {
+                "name": "get_orchestrator_run",
+                "arguments": {"run_id": "00000000-0000-0000-0000-000000000000"},
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+# ---- Article pipeline (create_article_run / approve_article_outline) --
+
+
+async def test_tools_call_creates_article_run(
+    client, tenant_factory, allow_writer, no_celery
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 38,
+            "method": "tools/call",
+            "params": {
+                "name": "create_article_run",
+                "arguments": {
+                    "topic": "how to write good docs",
+                    "primary_keyword": "technical writing",
+                    "secondary_keywords": ["docs", "style guide"],
+                    "tags": ["writing"],
+                },
+            },
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is False
+    run = json.loads(result["content"][0]["text"])
+    assert run["status"] == "QUEUED"
+    assert run["brief"] == "how to write good docs"
+
+
+async def test_create_article_run_requires_topic(client, tenant_factory, allow_writer):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 39,
+            "method": "tools/call",
+            "params": {"name": "create_article_run", "arguments": {}},
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+@requires_real_authz
+async def test_create_article_run_surfaces_403_as_a_soft_tool_error(
+    client, tenant_factory
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 40,
+            "method": "tools/call",
+            "params": {
+                "name": "create_article_run",
+                "arguments": {"topic": "x"},
+            },
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_tools_call_approves_article_outline(
+    client, db, tenant_factory, allow_writer, no_celery
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+    created = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 41,
+            "method": "tools/call",
+            "params": {
+                "name": "create_article_run",
+                "arguments": {"topic": "how to write good docs"},
+            },
+        },
+        headers=headers,
+    )
+    run_id = json.loads(created.json()["result"]["content"][0]["text"])["run_id"]
+
+    run = await db.get(OrchestratorRun, UUID(run_id))
+    run.status = OrchestratorRunStatus.AWAITING_OUTLINE_APPROVAL
+    await db.commit()
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "tools/call",
+            "params": {
+                "name": "approve_article_outline",
+                "arguments": {
+                    "run_id": run_id,
+                    "outline": [
+                        {"heading": "Intro", "points": ["why docs matter"]},
+                        {"heading": "Conclusion", "points": []},
+                    ],
+                },
+            },
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is False
+    body = json.loads(result["content"][0]["text"])
+    assert body["status"] == "QUEUED"
+    assert body["outline"] == [
+        {"heading": "Intro", "points": ["why docs matter"]},
+        {"heading": "Conclusion", "points": []},
+    ]
+
+
+async def test_approve_article_outline_rejects_wrong_status(
+    client, tenant_factory, allow_writer, no_celery
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+    created = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 43,
+            "method": "tools/call",
+            "params": {
+                "name": "create_article_run",
+                "arguments": {"topic": "how to write good docs"},
+            },
+        },
+        headers=headers,
+    )
+    run_id = json.loads(created.json()["result"]["content"][0]["text"])["run_id"]
+
+    # Run is QUEUED, not AWAITING_OUTLINE_APPROVAL yet.
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 44,
+            "method": "tools/call",
+            "params": {
+                "name": "approve_article_outline",
+                "arguments": {
+                    "run_id": run_id,
+                    "outline": [{"heading": "Intro", "points": []}],
+                },
+            },
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_approve_article_outline_requires_outline(
+    client, tenant_factory, allow_writer
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 45,
+            "method": "tools/call",
+            "params": {
+                "name": "approve_article_outline",
+                "arguments": {"run_id": str(uuid.uuid4())},
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_tools_call_lists_publications(client, tenant_factory):
+    headers, _ = await _key_headers(client, tenant_factory)
+    listed = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 30,
+            "method": "tools/call",
+            "params": {"name": "list_publications", "arguments": {}},
+        },
+        headers=headers,
+    )
+    assert listed.status_code == 200
+    result = listed.json()["result"]
+    assert result["isError"] is False
+    items = json.loads(result["content"][0]["text"])["items"]
+    assert items == []
+
+
+# ---- Analytics connectors + recommendations ---------------------------
+
+
+async def test_tools_call_lists_analytics_connectors(
+    client, tenant_factory, allow_writer
+):
+    headers, acct = await _key_headers(client, tenant_factory)
+    created = await client.post(
+        "/analytics/connectors",
+        json={"provider": "ga4", "display_name": "GA", "external_property_id": "1"},
+        headers=acct["headers"],
+    )
+    assert created.status_code == 201
+    connector_id = created.json()["id"]
+
+    listed = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 31,
+            "method": "tools/call",
+            "params": {"name": "list_analytics_connectors", "arguments": {}},
+        },
+        headers=headers,
+    )
+    assert listed.status_code == 200
+    result = listed.json()["result"]
+    assert result["isError"] is False
+    items = json.loads(result["content"][0]["text"])["items"]
+    assert any(c["id"] == connector_id for c in items)
+
+
+async def test_sync_analytics_connector_requires_connected_status(
+    client, tenant_factory, allow_writer
+):
+    headers, acct = await _key_headers(client, tenant_factory)
+    created = await client.post(
+        "/analytics/connectors",
+        json={"provider": "ga4", "display_name": "GA", "external_property_id": "1"},
+        headers=acct["headers"],
+    )
+    connector_id = created.json()["id"]
+    assert created.json()["status"] == "NEEDS_AUTH"
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 32,
+            "method": "tools/call",
+            "params": {
+                "name": "sync_analytics_connector",
+                "arguments": {"connector_id": connector_id},
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_sync_analytics_connector_queues_task_once_connected(
+    client, db, tenant_factory, allow_writer, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.workers import tasks
+
+    monkeypatch.setattr(
+        tasks.sync_analytics_connector,
+        "delay",
+        lambda *a, **k: SimpleNamespace(id="sync-task"),
+    )
+
+    headers, acct = await _key_headers(client, tenant_factory)
+    created = await client.post(
+        "/analytics/connectors",
+        json={"provider": "ga4", "display_name": "GA", "external_property_id": "1"},
+        headers=acct["headers"],
+    )
+    connector_id = created.json()["id"]
+
+    from app.models.analytics_connector import AnalyticsConnector
+
+    row = await db.get(AnalyticsConnector, uuid.UUID(connector_id))
+    row.status = AnalyticsConnectorStatus.CONNECTED
+    await db.commit()
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 33,
+            "method": "tools/call",
+            "params": {
+                "name": "sync_analytics_connector",
+                "arguments": {"connector_id": connector_id},
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is False
+    body = json.loads(result["content"][0]["text"])
+    assert body["status"] == "QUEUED"
+    assert body["task_id"] == "sync-task"
+
+
+async def _seed_recommendation(db, tenant):
+    rec = ContentRecommendation(
+        id=uuid.uuid4(),
+        tenant_id=tenant.id,
+        kind="REFRESH",
+        content_piece_id=None,
+        title='Refresh "Old post"',
+        rationale="traffic dropped 80%",
+        score=0.8,
+    )
+    db.add(rec)
+    await db.commit()
+    await db.refresh(rec)
+    return rec
+
+
+async def test_tools_call_lists_recommendations(client, db, tenant_factory):
+    headers, acct = await _key_headers(client, tenant_factory)
+    rec = await _seed_recommendation(db, acct["tenant"])
+
+    listed = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 34,
+            "method": "tools/call",
+            "params": {"name": "list_recommendations", "arguments": {}},
+        },
+        headers=headers,
+    )
+    assert listed.status_code == 200
+    result = listed.json()["result"]
+    assert result["isError"] is False
+    items = json.loads(result["content"][0]["text"])["items"]
+    assert any(r["id"] == str(rec.id) for r in items)
+
+
+async def test_tools_call_dismisses_recommendation(
+    client, db, tenant_factory, allow_writer
+):
+    headers, acct = await _key_headers(client, tenant_factory)
+    rec = await _seed_recommendation(db, acct["tenant"])
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 35,
+            "method": "tools/call",
+            "params": {
+                "name": "dismiss_recommendation",
+                "arguments": {"recommendation_id": str(rec.id)},
+            },
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is False
+    body = json.loads(result["content"][0]["text"])
+    assert body["status"] == "DISMISSED"
+
+
+async def test_dismiss_recommendation_unknown_id_is_soft_error(
+    client, tenant_factory, allow_writer
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 36,
+            "method": "tools/call",
+            "params": {
+                "name": "dismiss_recommendation",
+                "arguments": {
+                    "recommendation_id": "00000000-0000-0000-0000-000000000000"
+                },
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_tools_call_starts_run_from_recommendation(
+    client, db, tenant_factory, allow_writer, no_celery
+):
+    headers, acct = await _key_headers(client, tenant_factory)
+    rec = await _seed_recommendation(db, acct["tenant"])
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 37,
+            "method": "tools/call",
+            "params": {
+                "name": "start_run_from_recommendation",
+                "arguments": {"recommendation_id": str(rec.id)},
+            },
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is False
+    body = json.loads(result["content"][0]["text"])
+    assert body["status"] == "ACTIONED"
+    assert body["orchestrator_run_id"]

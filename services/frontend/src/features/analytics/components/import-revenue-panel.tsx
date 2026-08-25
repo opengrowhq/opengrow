@@ -1,8 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { type AnalyticsImportProvider, type AnalyticsImportRow } from "../api";
-import { useCreateRevenueEvent, useImportAnalyticsEvents } from "../hooks";
+import {
+  useCreateRevenueEvent,
+  useImportAnalyticsEvents,
+  useImportAnalyticsEventsCsv,
+} from "../hooks";
 import { cleanImportRow, dollarsToCents } from "../import-form.mjs";
 
 const revenueEventTypes = ["signup", "lead", "customer", "revenue"] as const;
@@ -18,6 +22,8 @@ export function ImportRevenuePanel() {
 
 function AnalyticsImportPanel() {
   const importEvents = useImportAnalyticsEvents();
+  const importCsv = useImportAnalyticsEventsCsv();
+  const csvInputRef = useRef<HTMLInputElement>(null);
   const [provider, setProvider] = useState<AnalyticsImportProvider>("manual");
   const [contentPieceId, setContentPieceId] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
@@ -151,6 +157,47 @@ function AnalyticsImportPanel() {
           Import
         </button>
       </form>
+      <div className="mt-4 border-t border-gray-100 pt-4">
+        <p className="text-xs font-medium text-gray-500">
+          Or bulk import from a CSV (columns: content_piece_id, source_url,
+          channel, external_id, visits, signups, leads, customers,
+          revenue_cents, currency, occurred_at)
+        </p>
+        <input
+          ref={csvInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="mt-2 block w-full text-xs text-gray-600 file:mr-3 file:rounded-full file:border-0 file:bg-gray-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-gray-700 hover:file:bg-gray-200"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            importCsv.mutate(
+              { file, provider },
+              {
+                onSettled: () => {
+                  if (csvInputRef.current) csvInputRef.current.value = "";
+                },
+              },
+            );
+          }}
+        />
+        {importCsv.isPending && (
+          <p className="mt-2 text-xs text-gray-500">Importing…</p>
+        )}
+        {importCsv.data && (
+          <p className="mt-2 text-xs text-emerald-700">
+            Imported {importCsv.data.imported_events} events from{" "}
+            {importCsv.data.imported_rows} rows.
+          </p>
+        )}
+        {importCsv.error && (
+          <p className="mt-2 rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+            {importCsv.error instanceof Error
+              ? importCsv.error.message
+              : "CSV import failed"}
+          </p>
+        )}
+      </div>
     </section>
   );
 }

@@ -49,8 +49,11 @@ bcrypt==4.0.1
 # HTTP
 httpx==0.28.1
 
+# Billing (hosted only)
+stripe==15.4.0
+
 # LLM abstraction (ALL model calls route here)
-litellm==1.95.0
+litellm==1.96.0
 
 # ReBAC
 openfga-sdk==0.10.4

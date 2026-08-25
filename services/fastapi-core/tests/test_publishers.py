@@ -79,6 +79,27 @@ def test_linkedin_payload_shape():
     )
 
 
+def test_slack_payload_includes_title_and_body():
+    from app.core.publishers import slack
+
+    p = slack.build_payload("Title", "Body text")
+    assert p["text"] == "*Title*\nBody text"
+
+
+def test_slack_payload_without_title_uses_body_only():
+    from app.core.publishers import slack
+
+    p = slack.build_payload("", "Body text")
+    assert p["text"] == "Body text"
+
+
+def test_slack_payload_truncates_to_max_length():
+    from app.core.publishers import slack
+
+    p = slack.build_payload("", "a" * 5000)
+    assert len(p["text"]) == slack._MAX_TEXT
+
+
 # ---- SSRF guards (block internal/metadata targets before any connection) ----
 
 
@@ -135,3 +156,32 @@ async def test_email_blocks_internal_smtp_override():
             body="b",
             config={"to": "x@y.com", "smtp_host": "127.0.0.1", "smtp_port": 5432},
         )
+
+
+async def test_slack_blocks_internal_webhook_url():
+    from app.core.publishers import slack
+
+    with pytest.raises(PublisherError):
+        await slack.publish(
+            title="t",
+            body="b",
+            config={"webhook_url": "http://127.0.0.1:8000/webhook"},
+        )
+
+
+async def test_slack_blocks_cloud_metadata():
+    from app.core.publishers import slack
+
+    with pytest.raises(PublisherError):
+        await slack.publish(
+            title="t",
+            body="b",
+            config={"webhook_url": "http://169.254.169.254/webhook"},
+        )
+
+
+async def test_slack_requires_webhook_url():
+    from app.core.publishers import slack
+
+    with pytest.raises(PublisherError):
+        await slack.publish(title="t", body="b", config={})

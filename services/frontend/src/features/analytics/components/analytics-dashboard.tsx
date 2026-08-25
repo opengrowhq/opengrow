@@ -30,6 +30,7 @@ import { BreakdownTrendCards } from "./breakdown-trend-cards";
 import { TrackingStatusCard } from "./tracking-status-card";
 import { ConnectorsPanel } from "./connectors-panel";
 import { ImportRevenuePanel } from "./import-revenue-panel";
+import { RecommendationsPanel } from "./recommendations-panel";
 
 export function AnalyticsDashboard() {
   const hasToken = useAuthGuard();
@@ -201,6 +202,7 @@ export function AnalyticsDashboard() {
 
       <div className="mt-10 space-y-6">
         <TrackingStatusCard status={tracking} tenantSlug={slug} />
+        <RecommendationsPanel />
         <ConnectorsPanel />
         <ImportRevenuePanel />
       </div>

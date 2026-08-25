@@ -4,7 +4,7 @@ OpenGrow is pre-alpha. Do not use it with sensitive production data unless you h
 
 ## Reporting vulnerabilities
 
-Email security issues to `anaxagoras.kosta@gmail.com`. Please include:
+Report security issues privately via [GitHub Security Advisories](https://github.com/opengrowhq/opengrow/security/advisories/new) — do not email or open a public issue. Please include:
 
 - Affected version or commit.
 - Reproduction steps.

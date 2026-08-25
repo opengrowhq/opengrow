@@ -1,4 +1,4 @@
-import { apiGet, apiSend } from "@/lib/http";
+import { API_BASE, apiGet, apiSend, authHeaders, parse } from "@/lib/http";
 import { analyticsWindowQuery } from "./window.mjs";
 
 export type AttributionSummary = {
@@ -140,6 +140,18 @@ export type AnalyticsConnectorSyncResult = {
 
 export type AnalyticsWindow = "7" | "30" | "90" | "all";
 
+export type ContentRecommendation = {
+  id: string;
+  kind: "REFRESH" | "DOUBLE_DOWN" | "NEW_TOPIC";
+  content_piece_id: string | null;
+  title: string;
+  rationale: string;
+  score: number;
+  status: "PENDING" | "ACTIONED" | "DISMISSED";
+  orchestrator_run_id: string | null;
+  created_at: string;
+};
+
 export const getAttributionSummary = (window: AnalyticsWindow = "all") =>
   apiGet<AttributionSummary>(`/analytics/summary${analyticsWindowQuery(window)}`);
 
@@ -183,6 +195,21 @@ export const createRevenueEvent = (body: RevenueEventInput) =>
 export const importAnalyticsEvents = (body: AnalyticsImportInput) =>
   apiSend<AnalyticsImportResult>("/analytics/import", "POST", body);
 
+export async function importAnalyticsEventsCsv(
+  file: File,
+  provider: AnalyticsImportProvider = "manual",
+): Promise<AnalyticsImportResult> {
+  const form = new FormData();
+  form.append("file", file);
+  return parse(
+    await fetch(`${API_BASE}/analytics/import/csv?provider=${provider}`, {
+      method: "POST",
+      headers: authHeaders(), // no Content-Type — browser sets multipart boundary
+      body: form,
+    }),
+  );
+}
+
 export const listAnalyticsConnectors = () =>
   apiGet<AnalyticsConnector[]>("/analytics/connectors");
 
@@ -204,3 +231,16 @@ export const syncAnalyticsConnector = (id: string) =>
 
 export const getGoogleAuthUrl = (provider: "ga4" | "gsc") =>
   apiGet<GoogleAuthUrl>(`/analytics/connectors/google/auth-url?provider=${provider}`);
+
+export const listRecommendations = (status: string = "PENDING") =>
+  apiGet<ContentRecommendation[]>(`/analytics/recommendations?status=${status}`);
+
+export const dismissRecommendation = (id: string) =>
+  apiSend<ContentRecommendation>(`/analytics/recommendations/${id}/dismiss`, "POST", {});
+
+export const startRunFromRecommendation = (id: string) =>
+  apiSend<ContentRecommendation>(
+    `/analytics/recommendations/${id}/start-run`,
+    "POST",
+    {},
+  );

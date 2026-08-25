@@ -8,7 +8,7 @@ import re
 import smtplib
 from datetime import datetime, timezone
 from email.message import EmailMessage
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -27,8 +27,15 @@ from app.core.google_oauth import refresh_google_access_token
 from app.core.litellm_client import chat_completion, embed
 from app.core.minio_client import get_object_bytes, promote_to_assets
 from app.core.qdrant import upsert_asset_embedding
+from app.core.analytics_window import analytics_periods
 from app.core.article_grounding import ground_article
+from app.core.content_recommendations import build_recommendations
+from app.core.credential_crypto import CredentialCryptoError, decrypt_secret
+from app.core.credits import grant_credits_sync, real_generation_cost_cents
 from app.core.generation_messages import build_generation_messages
+from app.core.github_publisher import GitHubPublishError
+from app.core.publishers import PublisherError, get_adapter
+from app.core.usage import record_usage_sync
 from app.models.analytics import RevenueEvent, RevenueEventType
 from app.models.asset import Asset, AssetStatus
 from app.models.analytics_connector import (
@@ -37,7 +44,16 @@ from app.models.analytics_connector import (
     AnalyticsConnectorStatus,
 )
 from app.models.brand import Brand, BrandStatus
+from app.models.content_piece import ContentPiece, ContentStatus
+from app.models.content_recommendation import (
+    ContentRecommendation,
+    ContentRecommendationKind,
+    ContentRecommendationStatus,
+)
 from app.models.generation import Generation, GenerationStatus
+from app.models.github_credential import GitHubCredential
+from app.models.publication import Publication, PublicationChannel, PublicationStatus
+from app.models.tenant import Tenant
 
 log = logging.getLogger("worker")
 
@@ -204,8 +220,9 @@ def run_generation(self, generation_id: str) -> str:
             db, gen, brand=brand, context=context
         )
         model = (gen.metadata_json or {}).get("model") or settings.DEFAULT_LLM_MODEL
+        hold_cents = meta.get("credit_hold_cents")
         try:
-            content = _run(
+            content, raw_response = _run(
                 chat_completion(messages=messages, model=model, max_tokens=max_tokens)
             )
             gen.result = content
@@ -215,7 +232,32 @@ def run_generation(self, generation_id: str) -> str:
             gen.status = GenerationStatus.FAILED
             gen.error_message = f"{e.__class__.__name__}: {e}"[:500]
             db.commit()
+            # Refund the full hold — no charge for a failed generation. This
+            # task retries (max_retries=2): only refund once self.retry()
+            # itself gives up (raises the original exception rather than a
+            # Retry that Celery will re-drive), otherwise each retry attempt
+            # would refund the same hold again while the row is still queued
+            # to try the LLM call once more.
+            is_final_attempt = self.request.retries >= self.max_retries
+            if hold_cents and is_final_attempt:
+                grant_credits_sync(
+                    db, tenant_id=gen.tenant_id, amount_cents=hold_cents
+                )
             raise self.retry(exc=e)
+
+        # Settle the hold to the real cost. Only ever refunds the
+        # difference (real cost is bounded by the same max_tokens the hold
+        # was computed from) — never charges more than what was held.
+        if hold_cents:
+            try:
+                real_cents = real_generation_cost_cents(raw_response)
+            except Exception:
+                real_cents = hold_cents  # pricing lookup failed — no refund, not a loss
+            refund_cents = max(0, hold_cents - real_cents)
+            if refund_cents:
+                grant_credits_sync(
+                    db, tenant_id=gen.tenant_id, amount_cents=refund_cents
+                )
 
     notify_email.delay(generation_id, "complete")
     return "ok"
@@ -562,7 +604,7 @@ def build_brand_profile(self, brand_id: str) -> str:
             f"Website text:\n{site.get('text', '')}"
         )
         try:
-            raw = _run(
+            raw, _resp = _run(
                 chat_completion(
                     messages=[
                         {"role": "system", "content": _BRAND_SYSTEM},
@@ -586,3 +628,327 @@ def build_brand_profile(self, brand_id: str) -> str:
         brand.status = BrandStatus.READY
         db.commit()
     return "ok"
+
+
+# -----------------------------------------------------------------------------
+# Scheduled content publish (content calendar closing the loop: due_at +
+# a pre-configured scheduled_publish target auto-publishes without a manual
+# click). Same "sweep + fan out" shape as sync_connected_analytics_connectors.
+# -----------------------------------------------------------------------------
+def _sweep_due_content(db) -> list:
+    """Query logic isolated from the Celery task + its module-level engine,
+    so tests can pass in the test session directly (mirrors
+    app.core.orchestrator.execute_run's db-argument shape)."""
+    now = datetime.now(timezone.utc).isoformat()
+    return (
+        db.query(ContentPiece.id)
+        .filter(
+            ContentPiece.status == ContentStatus.APPROVED,
+            ContentPiece.is_deleted.is_(False),
+            ContentPiece.metadata_json["due_at"].astext <= now,
+            ContentPiece.metadata_json["scheduled_publish"].isnot(None),
+        )
+        .all()
+    )
+
+
+@celery.task(name="app.workers.tasks.publish_due_content")
+def publish_due_content() -> str:
+    with _SyncSession() as db:
+        candidates = _sweep_due_content(db)
+    for (cp_id,) in candidates:
+        publish_scheduled_content_piece.delay(str(cp_id))
+    return f"queued:{len(candidates)}"
+
+
+def _resolve_github_token_sync(db, tenant_id: UUID) -> str | None:
+    credential = (
+        db.query(GitHubCredential)
+        .filter(
+            GitHubCredential.tenant_id == tenant_id,
+            GitHubCredential.is_deleted.is_(False),
+        )
+        .order_by(GitHubCredential.updated_at.desc())
+        .first()
+    )
+    if credential:
+        try:
+            return decrypt_secret(credential.token_encrypted)
+        except CredentialCryptoError:
+            return None
+    return settings.GITHUB_TOKEN or None
+
+
+def _render_scheduled_markdown(cp: ContentPiece) -> str:
+    """Same frontmatter shape as app.routers.content._render_markdown —
+    duplicated rather than imported (that helper lives in an async-router
+    module with FastAPI-only deps; both are pure functions over a
+    ContentPiece with no I/O, and the router version is what a manual
+    /publish call renders, so keeping them in obvious lockstep in one
+    review is safer than an import that couples a worker to a router
+    module's import graph for a handful of lines)."""
+
+    def esc(v: str) -> str:
+        return str(v).replace("\\", "\\\\").replace('"', '\\"')
+
+    article = ((cp.metadata_json or {}).get("article")) or {}
+    date = cp.created_at.date().isoformat()
+    lines = ["---", f'title: "{esc(cp.title)}"']
+    if (cp.format or "") == "blog_post":
+        slug = re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9 _/-]", "", cp.title.lower()))
+        slug = slug.replace(" ", "-").replace("_", "-").replace("/", "-").strip("-")
+        slug = (article.get("slug") or slug) or "untitled"
+        description = article.get("description") or ""
+        tags = article.get("tags") or []
+        lines += [
+            f"slug: {slug}",
+            f"date: {date}",
+            f'description: "{esc(description)}"',
+            "tags: [" + ", ".join(f'"{esc(t)}"' for t in tags) + "]",
+            "draft: false",  # only APPROVED pieces reach this task
+        ]
+    else:
+        lines.append(f"date: {date}")
+    lines += ["---", "", ""]
+    return "\n".join(lines) + (cp.body or "")
+
+
+def _publish_scheduled_content_piece(db, content_piece_id: str) -> str:
+    """Core logic, isolated from the Celery task wrapper so tests can pass
+    in the test session directly (same split as _sweep_due_content above)."""
+    cp = db.get(ContentPiece, UUID(content_piece_id))
+    if not cp or cp.is_deleted:
+        return "missing"
+    if cp.status != ContentStatus.APPROVED:
+        return "skipped:not_approved"  # edited/transitioned since the sweep
+    scheduled = (cp.metadata_json or {}).get("scheduled_publish")
+    if not scheduled:
+        return "skipped:not_scheduled"  # cleared since the sweep
+
+    channel = scheduled["channel"]
+    config = scheduled.get("config") or {}
+    body = _render_scheduled_markdown(cp)
+
+    try:
+        channel_enum = PublicationChannel(channel)
+    except ValueError:
+        return f"failed:unknown_channel:{channel}"
+
+    pub = Publication(
+        tenant_id=cp.tenant_id,
+        owner_id=cp.owner_id,
+        content_piece_id=cp.id,
+        channel=channel_enum,
+        status=PublicationStatus.PUBLISHING,
+        target={"channel": channel},
+    )
+    db.add(pub)
+    db.commit()
+    db.refresh(pub)
+
+    try:
+        if channel == "GITHUB_PR":
+            token = _resolve_github_token_sync(db, cp.tenant_id)
+            if not token:
+                raise PublisherError("GitHub publishing not configured")
+            from app.core.github_publisher import publish_markdown
+
+            path = config.get("path") or f"content/{cp.id}.md"
+            branch = config.get("branch") or f"opengrow/{cp.id}"
+            result = _run(
+                publish_markdown(
+                    repo=config["repo"],
+                    path=path,
+                    content=body,
+                    branch=branch,
+                    commit_message=config.get("commit_message")
+                    or f"content: {cp.title}",
+                    pr_title=config.get("pr_title") or cp.title,
+                    pr_body=config.get("pr_body")
+                    or f"Published via OpenGrow — content piece {cp.id}.",
+                    base_branch=config.get("base_branch"),
+                    token=token,
+                    draft=config.get("draft", False),
+                    labels=config.get("labels"),
+                    reviewers=config.get("reviewers"),
+                )
+            )
+            pub.status = PublicationStatus.PR_OPENED
+            pub.url = result["pr_url"]
+            pub.external_ref = f"PR #{result['pr_number']} ({result['branch']})"
+        else:
+            adapter = get_adapter(channel)
+            if adapter is None:
+                raise PublisherError(f"{channel} publishing not implemented")
+            result = _run(adapter.publish(title=cp.title, body=body, config=config))
+            pub.status = PublicationStatus.PUBLISHED
+            pub.url = result["url"]
+            pub.external_ref = result["external_ref"]
+    except (PublisherError, GitHubPublishError, KeyError) as e:
+        pub.status = PublicationStatus.FAILED
+        pub.error_message = str(e)[:500]
+        db.commit()
+        return f"failed:{e.__class__.__name__}"
+
+    cp.status = ContentStatus.PUBLISHED
+    db.commit()
+    record_usage_sync(
+        db,
+        tenant_id=cp.tenant_id,
+        kind="publish",
+        ref_type="publication",
+        ref_id=str(pub.id),
+        details={"channel": channel, "scheduled": True},
+    )
+    return "ok"
+
+
+@celery.task(
+    bind=True,
+    name="app.workers.tasks.publish_scheduled_content_piece",
+    max_retries=2,
+    default_retry_delay=60,
+)
+def publish_scheduled_content_piece(self, content_piece_id: str) -> str:
+    with _SyncSession() as db:
+        return _publish_scheduled_content_piece(db, content_piece_id)
+
+
+# -----------------------------------------------------------------------------
+# Attribution loop: decay/growth recommendations (content calendar's "what to
+# write/refresh next" — closes Phase 6). Sync twin of app.routers.analytics'
+# _content_counts_for_period (that helper is async-only, and this codebase's
+# convention is sync Session + sync ORM queries inside Celery tasks, same as
+# every other _sync-suffixed helper here).
+# -----------------------------------------------------------------------------
+RECOMMENDATION_WINDOW_DAYS = 30
+
+
+def _content_counts_for_period_sync(
+    db, tenant_id: UUID, *, start: datetime, end: datetime
+) -> dict[UUID, dict[str, int]]:
+    rows = (
+        db.query(RevenueEvent)
+        .filter(
+            RevenueEvent.tenant_id == tenant_id,
+            RevenueEvent.content_piece_id.isnot(None),
+            RevenueEvent.is_deleted.is_(False),
+            RevenueEvent.occurred_at >= start,
+            RevenueEvent.occurred_at < end,
+        )
+        .all()
+    )
+    by_content: dict[UUID, dict[str, int]] = {}
+    for event in rows:
+        counts = by_content.setdefault(
+            event.content_piece_id,
+            {
+                "events": 0,
+                "visits": 0,
+                "signups": 0,
+                "leads": 0,
+                "customers": 0,
+                "revenue_cents": 0,
+            },
+        )
+        event_count = event.event_count or 1
+        counts["events"] += event_count
+        if event.event_type == RevenueEventType.REVENUE:
+            counts["revenue_cents"] += event.amount_cents
+    return by_content
+
+
+def _generate_recommendations_for_tenant(db, tenant_id: UUID) -> int:
+    """Core logic, isolated from the Celery task wrapper so tests can pass
+    in the test session directly (same split as the scheduled-publish
+    tasks above)."""
+    previous_start, current_start, end = analytics_periods(RECOMMENDATION_WINDOW_DAYS)
+    current_counts = _content_counts_for_period_sync(
+        db, tenant_id, start=current_start, end=end
+    )
+    previous_counts = _content_counts_for_period_sync(
+        db, tenant_id, start=previous_start, end=current_start
+    )
+
+    published = (
+        db.query(ContentPiece)
+        .filter(
+            ContentPiece.tenant_id == tenant_id,
+            ContentPiece.status == ContentStatus.PUBLISHED,
+            ContentPiece.is_deleted.is_(False),
+        )
+        .all()
+    )
+    pieces = [
+        {
+            "id": cp.id,
+            "title": cp.title,
+            "tags": ((cp.metadata_json or {}).get("article") or {}).get("tags"),
+        }
+        for cp in published
+    ]
+    suggestions = build_recommendations(
+        pieces, current_counts=current_counts, previous_counts=previous_counts
+    )
+
+    # Skip a suggestion if an open (PENDING) one for the same piece+kind
+    # already exists — the partial unique index would reject the insert
+    # anyway, but checking first avoids a noisy IntegrityError per sweep.
+    # NEW_TOPIC has no content_piece_id (it's a tenant-wide gap, not a
+    # per-piece suggestion, so the DB constraint above deliberately excludes
+    # NULL content_piece_id rows from the unique index) — dedup those by
+    # title instead, since each gap's title encodes the specific tag.
+    existing_pending = {
+        (row.content_piece_id, row.kind)
+        for row in db.query(
+            ContentRecommendation.content_piece_id, ContentRecommendation.kind
+        ).filter(
+            ContentRecommendation.tenant_id == tenant_id,
+            ContentRecommendation.status == ContentRecommendationStatus.PENDING,
+            ContentRecommendation.is_deleted.is_(False),
+            ContentRecommendation.content_piece_id.is_not(None),
+        )
+    }
+    existing_new_topic_titles = {
+        row.title
+        for row in db.query(ContentRecommendation.title).filter(
+            ContentRecommendation.tenant_id == tenant_id,
+            ContentRecommendation.status == ContentRecommendationStatus.PENDING,
+            ContentRecommendation.is_deleted.is_(False),
+            ContentRecommendation.kind == ContentRecommendationKind.NEW_TOPIC,
+        )
+    }
+
+    created = 0
+    for s in suggestions:
+        kind = ContentRecommendationKind(s["kind"])
+        if kind == ContentRecommendationKind.NEW_TOPIC:
+            if s["title"] in existing_new_topic_titles:
+                continue
+        elif (s["content_piece_id"], kind) in existing_pending:
+            continue
+        db.add(
+            ContentRecommendation(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                kind=kind,
+                content_piece_id=s["content_piece_id"],
+                title=s["title"],
+                rationale=s["rationale"],
+                score=s["score"],
+            )
+        )
+        created += 1
+    if created:
+        db.commit()
+    return created
+
+
+@celery.task(name="app.workers.tasks.generate_content_recommendations")
+def generate_content_recommendations() -> str:
+    with _SyncSession() as db:
+        tenant_ids = [row[0] for row in db.query(Tenant.id).all()]
+        total = 0
+        for tenant_id in tenant_ids:
+            total += _generate_recommendations_for_tenant(db, tenant_id)
+    return f"created:{total}"

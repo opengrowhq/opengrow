@@ -84,6 +84,13 @@ export function LoginForm() {
             <Button type="submit" size="lg" loading={login.isPending} className="w-full">
               {login.isPending ? "Signing in…" : "Sign in"}
             </Button>
+
+            <p className="text-center text-sm font-medium text-gray-500">
+              New to OpenGrow?{" "}
+              <a href="/signup" className="font-bold text-og-green-700 hover:underline">
+                Create a workspace
+              </a>
+            </p>
           </div>
         </motion.form>
       </div>

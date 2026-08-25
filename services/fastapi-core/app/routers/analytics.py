@@ -1,9 +1,21 @@
+import csv
+import io
 from datetime import datetime, timezone
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+import stripe
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,8 +39,15 @@ from app.models.analytics_connector import (
     AnalyticsConnectorProvider,
     AnalyticsConnectorStatus,
 )
+from app.core.audit import record_audit_event
+from app.core.credential_crypto import CredentialCryptoError, decrypt_secret, encrypt_secret
 from app.models.content_piece import ContentPiece
+from app.models.content_recommendation import (
+    ContentRecommendation,
+    ContentRecommendationStatus,
+)
 from app.models.tenant import Tenant
+from app.models.tenant_stripe import TenantStripeCredential, TenantStripeWebhookEvent
 from app.models.user import User
 from app.schemas.analytics import (
     AnalyticsConnectorAuthUrlOut,
@@ -38,12 +57,14 @@ from app.schemas.analytics import (
     AnalyticsConnectorSyncOut,
     AnalyticsImportOut,
     AnalyticsImportRequest,
+    AnalyticsImportRow,
     AttributionDeltaOut,
     AttributionSummaryOut,
     AttributionTrendOut,
     ChannelTrendOut,
     ChannelAttributionOut,
     ContentAttributionOut,
+    ContentRecommendationOut,
     ContentTrendOut,
     PublicTrackEvent,
     PublicTrackOut,
@@ -51,11 +72,46 @@ from app.schemas.analytics import (
     RevenueEventOut,
     SourceAttributionOut,
     SourceTrendOut,
+    TenantStripeConfigOut,
+    TenantStripeCredentialUpsert,
     TrackingStatusOut,
 )
 from app.workers.tasks import sync_analytics_connector
 
 router = APIRouter()
+
+CSV_CONTENT_TYPES = {"text/csv", "application/vnd.ms-excel", "text/plain"}
+MAX_IMPORT_CSV_BYTES = 2 * 1024 * 1024  # 2 MiB
+MAX_IMPORT_CSV_ROWS = 500  # matches AnalyticsImportRequest.rows max_length
+CSV_IMPORT_COLUMNS = {
+    "content_piece_id",
+    "source_url",
+    "channel",
+    "external_id",
+    "visits",
+    "signups",
+    "leads",
+    "customers",
+    "revenue_cents",
+    "currency",
+    "occurred_at",
+}
+
+
+def _csv_row_to_import_row(raw: dict[str, str | None]) -> AnalyticsImportRow:
+    cleaned: dict[str, object] = {}
+    for key in ("content_piece_id", "source_url", "channel", "external_id", "currency"):
+        value = (raw.get(key) or "").strip()
+        if value:
+            cleaned[key] = value
+    for key in ("visits", "signups", "leads", "customers", "revenue_cents"):
+        value = (raw.get(key) or "").strip()
+        if value:
+            cleaned[key] = int(value)
+    occurred_at = (raw.get("occurred_at") or "").strip()
+    if occurred_at:
+        cleaned["occurred_at"] = occurred_at
+    return AnalyticsImportRow.model_validate(cleaned)
 
 PIXEL_GIF = (
     b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
@@ -678,31 +734,31 @@ async def tracking_status(
     )
 
 
-@router.post("/import", response_model=AnalyticsImportOut)
-async def import_events(
-    payload: AnalyticsImportRequest,
-    current: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
+async def _import_rows(
+    db: AsyncSession,
+    current: User,
+    provider: str,
+    rows: list[AnalyticsImportRow],
+) -> AnalyticsImportOut:
     await _assert_tenant_writer(current)
     imported = 0
     cache: dict[str, RevenueEvent] = {}
-    for row in payload.rows:
+    for row in rows:
         cp_id = await _assert_content(db, current, row.content_piece_id)
         occurred_at = row.occurred_at or datetime.now(timezone.utc)
-        channel = normalize_channel(payload.provider, row.source_url, row.channel)
+        channel = normalize_channel(provider, row.source_url, row.channel)
         base = {
             "tenant_id": current.tenant_id,
             "owner_id": current.id,
             "content_piece_id": cp_id,
             "currency": row.currency,
-            "provider": payload.provider,
+            "provider": provider,
             "channel": channel,
             "source_url": row.source_url,
             "occurred_at": occurred_at,
             "external_id": row.external_id,
             "metadata_json": {
-                "provider": payload.provider,
+                "provider": provider,
                 "channel": channel,
                 **({"external_id": row.external_id} if row.external_id else {}),
                 **(row.metadata or {}),
@@ -737,7 +793,68 @@ async def import_events(
             if created:
                 imported += 1
     await db.commit()
-    return AnalyticsImportOut(imported_events=imported, imported_rows=len(payload.rows))
+    return AnalyticsImportOut(imported_events=imported, imported_rows=len(rows))
+
+
+@router.post("/import", response_model=AnalyticsImportOut)
+async def import_events(
+    payload: AnalyticsImportRequest,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    return await _import_rows(db, current, payload.provider, payload.rows)
+
+
+@router.post("/import/csv", response_model=AnalyticsImportOut)
+async def import_events_csv(
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    file: UploadFile,
+    provider: Annotated[str, Query(pattern=r"^(ga4|gsc|manual)$")] = "manual",
+):
+    if file.content_type not in CSV_CONTENT_TYPES and not (
+        file.filename or ""
+    ).lower().endswith(".csv"):
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Expected a .csv file"
+        )
+    data = await file.read(MAX_IMPORT_CSV_BYTES + 1)
+    if len(data) > MAX_IMPORT_CSV_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "CSV too large")
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "CSV must be UTF-8 encoded"
+        ) from exc
+
+    reader = csv.DictReader(io.StringIO(text))
+    if reader.fieldnames is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "CSV has no header row")
+    unknown = set(reader.fieldnames) - CSV_IMPORT_COLUMNS
+    if unknown:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Unknown CSV column(s): {', '.join(sorted(unknown))}",
+        )
+
+    rows: list[AnalyticsImportRow] = []
+    for line_no, raw in enumerate(reader, start=2):
+        try:
+            rows.append(_csv_row_to_import_row(raw))
+        except (ValueError, ValidationError) as exc:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"Row {line_no}: {exc}"
+            ) from exc
+    if not rows:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "CSV has no data rows")
+    if len(rows) > MAX_IMPORT_CSV_ROWS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"CSV has {len(rows)} rows; max is {MAX_IMPORT_CSV_ROWS}",
+        )
+
+    return await _import_rows(db, current, provider, rows)
 
 
 @router.get("/connectors", response_model=list[AnalyticsConnectorOut])
@@ -1251,3 +1368,381 @@ async def source_attribution(
         key=lambda item: (item.revenue_cents, item.customers, item.leads, item.events),
         reverse=True,
     )
+
+
+# -----------------------------------------------------------------------------
+# Attribution loop: "what to write/refresh next" recommendations, computed
+# from real trend data by app.workers.tasks.generate_content_recommendations
+# (daily beat sweep). This router only reads/actions the persisted rows —
+# see that task for how scores are computed.
+# -----------------------------------------------------------------------------
+def _recommendation_out(rec: ContentRecommendation) -> ContentRecommendationOut:
+    return ContentRecommendationOut(
+        id=str(rec.id),
+        kind=rec.kind.value,
+        content_piece_id=str(rec.content_piece_id) if rec.content_piece_id else None,
+        title=rec.title,
+        rationale=rec.rationale,
+        score=rec.score,
+        status=rec.status.value,
+        orchestrator_run_id=(
+            str(rec.orchestrator_run_id) if rec.orchestrator_run_id else None
+        ),
+        created_at=rec.created_at,
+    )
+
+
+async def _load_recommendation(
+    db: AsyncSession, tenant_id: UUID, rec_id: UUID
+) -> ContentRecommendation:
+    row = await db.execute(
+        select(ContentRecommendation).where(
+            ContentRecommendation.id == rec_id,
+            ContentRecommendation.tenant_id == tenant_id,
+            ContentRecommendation.is_deleted.is_(False),
+        )
+    )
+    rec = row.scalar_one_or_none()
+    if not rec:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Recommendation not found")
+    return rec
+
+
+@router.get("/recommendations", response_model=list[ContentRecommendationOut])
+async def list_recommendations(
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    status_filter: str | None = Query(default="PENDING", alias="status"),
+):
+    await _assert_tenant_reader(current)
+    stmt = select(ContentRecommendation).where(
+        ContentRecommendation.tenant_id == current.tenant_id,
+        ContentRecommendation.is_deleted.is_(False),
+    )
+    if status_filter:
+        try:
+            stmt = stmt.where(
+                ContentRecommendation.status == ContentRecommendationStatus(
+                    status_filter.upper()
+                )
+            )
+        except ValueError:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"Unknown status: {status_filter}"
+            )
+    stmt = stmt.order_by(ContentRecommendation.score.desc())
+    rows = await db.execute(stmt)
+    return [_recommendation_out(r) for r in rows.scalars().all()]
+
+
+@router.post(
+    "/recommendations/{recommendation_id}/dismiss",
+    response_model=ContentRecommendationOut,
+)
+async def dismiss_recommendation(
+    recommendation_id: UUID,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    await _assert_tenant_writer(current)
+    rec = await _load_recommendation(db, current.tenant_id, recommendation_id)
+    if rec.status != ContentRecommendationStatus.PENDING:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Recommendation already {rec.status.value.lower()}",
+        )
+    rec.status = ContentRecommendationStatus.DISMISSED
+    await db.commit()
+    await db.refresh(rec)
+    return _recommendation_out(rec)
+
+
+@router.post(
+    "/recommendations/{recommendation_id}/start-run",
+    response_model=ContentRecommendationOut,
+)
+async def start_run_from_recommendation(
+    recommendation_id: UUID,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Turn a recommendation into a real orchestrator run — the attribution
+    loop's actual feedback step. Reuses the real POST /orchestrator/runs
+    handler rather than re-deriving run-creation logic (same "don't hand-
+    copy business logic" precedent as the MCP tools' create_generation/
+    create_orchestrator_run wiring)."""
+    from app.routers.orchestrator import create_run
+    from app.schemas.article import ArticleBrief
+    from app.schemas.orchestrator import OrchestratorRunCreate
+
+    await _assert_tenant_writer(current)
+    rec = await _load_recommendation(db, current.tenant_id, recommendation_id)
+    if rec.status != ContentRecommendationStatus.PENDING:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Recommendation already {rec.status.value.lower()}",
+        )
+
+    article_kwargs: dict = {"notes": rec.rationale}
+    if rec.content_piece_id:
+        source = await db.get(ContentPiece, rec.content_piece_id)
+        if source:
+            src_article = (source.metadata_json or {}).get("article") or {}
+            article_kwargs["topic"] = (
+                f"Refresh: {source.title}"
+                if rec.kind.value == "REFRESH"
+                else f"Follow-up to: {source.title}"
+            )
+            for key in ("primary_keyword", "secondary_keywords", "tags", "audience"):
+                if src_article.get(key):
+                    article_kwargs[key] = src_article[key]
+    if "topic" not in article_kwargs:
+        article_kwargs["topic"] = rec.title
+
+    run_out = await create_run(
+        OrchestratorRunCreate(
+            brief=article_kwargs["topic"],
+            article=ArticleBrief(**article_kwargs),
+        ),
+        current,
+        db,
+    )
+
+    rec.status = ContentRecommendationStatus.ACTIONED
+    rec.orchestrator_run_id = UUID(run_out.run_id)
+    await db.commit()
+    await db.refresh(rec)
+    return _recommendation_out(rec)
+
+
+# -----------------------------------------------------------------------------
+# Tenant-owned Stripe revenue sync: a tenant's OWN Stripe account (their
+# downstream customers paying THEM), completely separate from OpenGrow's own
+# platform-billing Stripe account (app.routers.billing / STRIPE_SECRET_KEY).
+# BYOK, mirrors app.routers.content's GitHub credential connect/disconnect
+# pattern; webhook signature verification mirrors app.routers.billing's
+# stripe_webhook, but scoped per tenant since each tenant has their own
+# webhook secret (no single settings.STRIPE_WEBHOOK_SECRET can verify it).
+# -----------------------------------------------------------------------------
+async def _load_tenant_stripe_credential(
+    db: AsyncSession, tenant_id: UUID
+) -> TenantStripeCredential | None:
+    return await db.scalar(
+        select(TenantStripeCredential).where(
+            TenantStripeCredential.tenant_id == tenant_id,
+            TenantStripeCredential.is_deleted.is_(False),
+        )
+    )
+
+
+@router.get("/stripe/config", response_model=TenantStripeConfigOut)
+async def tenant_stripe_config(
+    request: Request,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    await _assert_tenant_reader(current)
+    credential = await _load_tenant_stripe_credential(db, current.tenant_id)
+    if credential is None:
+        return TenantStripeConfigOut(configured=False)
+    webhook_url = str(
+        request.url_for("tenant_stripe_webhook", tenant_id=str(current.tenant_id))
+    )
+    return TenantStripeConfigOut(
+        configured=True,
+        secret_key_last4=credential.secret_key_last4,
+        display_name=credential.display_name,
+        webhook_url=webhook_url,
+    )
+
+
+@router.post(
+    "/stripe/credentials",
+    response_model=TenantStripeConfigOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upsert_tenant_stripe_credential(
+    payload: TenantStripeCredentialUpsert,
+    request: Request,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    await _assert_tenant_writer(current)
+    try:
+        stripe.StripeClient(payload.secret_key).v1.balance.retrieve()
+    except stripe.AuthenticationError as e:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"Stripe rejected the secret key: {e}"
+        ) from e
+    except stripe.StripeError as e:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"Could not reach Stripe: {e}"
+        ) from e
+
+    try:
+        secret_key_encrypted = encrypt_secret(payload.secret_key)
+        webhook_secret_encrypted = encrypt_secret(payload.webhook_secret)
+    except CredentialCryptoError as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
+
+    credential = await _load_tenant_stripe_credential(db, current.tenant_id)
+    if credential is None:
+        credential = TenantStripeCredential(
+            tenant_id=current.tenant_id,
+            owner_id=current.id,
+            secret_key_encrypted=secret_key_encrypted,
+            secret_key_last4=payload.secret_key[-4:],
+            webhook_secret_encrypted=webhook_secret_encrypted,
+            display_name=payload.display_name,
+        )
+        db.add(credential)
+    else:
+        credential.owner_id = current.id
+        credential.secret_key_encrypted = secret_key_encrypted
+        credential.secret_key_last4 = payload.secret_key[-4:]
+        credential.webhook_secret_encrypted = webhook_secret_encrypted
+        credential.display_name = payload.display_name
+    await record_audit_event(
+        db,
+        action="stripe_revenue.credentials.connected",
+        tenant_id=current.tenant_id,
+        actor_user_id=current.id,
+        actor_email=current.email,
+        details={"display_name": credential.display_name},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    await db.commit()
+    await db.refresh(credential)
+    webhook_url = str(
+        request.url_for("tenant_stripe_webhook", tenant_id=str(current.tenant_id))
+    )
+    return TenantStripeConfigOut(
+        configured=True,
+        secret_key_last4=credential.secret_key_last4,
+        display_name=credential.display_name,
+        webhook_url=webhook_url,
+    )
+
+
+@router.delete("/stripe/credentials", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_tenant_stripe_credential(
+    request: Request,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    await _assert_tenant_writer(current)
+    credential = await _load_tenant_stripe_credential(db, current.tenant_id)
+    if credential is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    credential.is_deleted = True
+    await record_audit_event(
+        db,
+        action="stripe_revenue.credentials.disconnected",
+        tenant_id=current.tenant_id,
+        actor_user_id=current.id,
+        actor_email=current.email,
+        details={},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _stripe_charge_to_revenue_event(
+    tenant_id: UUID, owner_id: UUID, charge: dict
+) -> RevenueEvent:
+    meta = charge.get("metadata") or {}
+    content_piece_id = None
+    if meta.get("content_piece_id"):
+        try:
+            content_piece_id = UUID(meta["content_piece_id"])
+        except ValueError:
+            content_piece_id = None
+    source_url = meta.get("source_url")
+    occurred_at = datetime.fromtimestamp(charge["created"], tz=timezone.utc)
+    channel = normalize_channel("stripe", source_url, meta.get("channel"))
+    dedupe_key = event_dedupe_key(
+        tenant_id=tenant_id,
+        provider="stripe",
+        event_type=RevenueEventType.REVENUE.value,
+        content_piece_id=content_piece_id,
+        source_url=source_url,
+        occurred_at=occurred_at,
+        external_id=charge["id"],
+    )
+    return RevenueEvent(
+        tenant_id=tenant_id,
+        owner_id=owner_id,
+        content_piece_id=content_piece_id,
+        event_type=RevenueEventType.REVENUE,
+        event_count=1,
+        amount_cents=charge["amount_received"],
+        currency=(charge.get("currency") or "usd").upper(),
+        provider="stripe",
+        channel=channel,
+        dedupe_key=dedupe_key,
+        source_url=source_url,
+        occurred_at=occurred_at,
+        metadata_json={"stripe_charge_id": charge["id"]},
+    )
+
+
+@router.post("/stripe/webhook/{tenant_id}", status_code=status.HTTP_200_OK)
+async def tenant_stripe_webhook(
+    tenant_id: UUID,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Unauthenticated by design (Stripe can't send a bearer token) — trust
+    comes entirely from the signature check against THIS tenant's stored
+    webhook_secret, mirrored from app.routers.billing.stripe_webhook. The
+    tenant_id in the path only selects which secret to verify against; it
+    grants nothing on its own."""
+    credential = await _load_tenant_stripe_credential(db, tenant_id)
+    if credential is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Stripe not connected")
+    try:
+        webhook_secret = decrypt_secret(credential.webhook_secret_encrypted)
+    except CredentialCryptoError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Stored webhook secret is unusable"
+        )
+
+    body = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    try:
+        event = stripe.Webhook.construct_event(body, sig_header, webhook_secret)
+    except (ValueError, stripe.SignatureVerificationError) as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid webhook: {e}") from e
+
+    existing = await db.scalar(
+        select(TenantStripeWebhookEvent).where(
+            TenantStripeWebhookEvent.tenant_id == tenant_id,
+            TenantStripeWebhookEvent.stripe_event_id == event["id"],
+        )
+    )
+    if existing:
+        return {"status": "already_processed"}
+
+    event_type = event["type"]
+    if event_type == "charge.succeeded":
+        charge = event["data"]["object"]
+        if charge.get("paid") and charge.get("amount_received", 0) > 0:
+            db.add(
+                _stripe_charge_to_revenue_event(tenant_id, credential.owner_id, charge)
+            )
+
+    db.add(
+        TenantStripeWebhookEvent(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            stripe_event_id=event["id"],
+            event_type=event_type,
+            payload=event.to_dict_recursive(),
+            processed_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
+    return {"status": "processed"}

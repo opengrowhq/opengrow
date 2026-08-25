@@ -83,9 +83,11 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = ""
     OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
     # Model used for generation + Brand DNA when a request doesn't specify one.
-    # e.g. "gpt-4o-mini" (OpenAI), "claude-3-5-sonnet", "gemini-1.5-flash",
-    # or "llama3.1" (local Ollama, free).
-    DEFAULT_LLM_MODEL: str = "gpt-4o-mini"
+    # Must be LiteLLM-resolvable — bare OpenAI names work, other providers
+    # need their prefix (LiteLLM can't route/price the call otherwise):
+    # e.g. "gpt-5-mini" (OpenAI), "claude-sonnet-4-5" (Anthropic),
+    # "gemini/gemini-flash-latest" (Google), or "llama3.1" (local Ollama, free).
+    DEFAULT_LLM_MODEL: str = "gpt-5-mini"
     # Embedding model passed to LiteLLM. Defaults to a free local Ollama model
     # in lite mode (no OpenAI key required) and OpenAI's small embedding model
     # in production. Override via env var if you have a different Ollama
@@ -100,6 +102,28 @@ class Settings(BaseSettings):
     GOOGLE_OAUTH_CLIENT_ID: str = ""
     GOOGLE_OAUTH_CLIENT_SECRET: str = ""
     GOOGLE_OAUTH_REDIRECT_URI: str = ""
+
+    # ---- Stripe billing (hosted only — Pro/Team paid tiers, managed LLM key) ----
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_PUBLISHABLE_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PRICE_ID_PRO: str = ""
+    STRIPE_PRICE_ID_TEAM: str = ""
+    # Team plan is base + per-seat: STRIPE_PRICE_ID_TEAM covers the first
+    # TEAM_INCLUDED_SEATS members; this price bills each seat beyond that,
+    # as a second line item on the same subscription (not a separate one).
+    STRIPE_PRICE_ID_TEAM_SEAT: str = ""
+    TEAM_INCLUDED_SEATS: int = 5
+    # Base URL the browser is served from — Checkout/Billing Portal redirect here.
+    FRONTEND_BASE_URL: str = "http://localhost:3000"
+
+    # ---- Orchestrator article-pipeline quality gate ----
+    # A draft below this score (0.0-1.0, see app/core/quality_score.py) is
+    # regenerated with feedback instead of promoted, up to ARTICLE_SCORE_MAX_RETRIES
+    # times. v1 scores on-page signals only (keyword/heading coverage, length,
+    # readability) — no external SERP comparison (would need a paid search API).
+    ARTICLE_SCORE_THRESHOLD: float = 0.6
+    ARTICLE_SCORE_MAX_RETRIES: int = 2
 
     @property
     def is_lite(self) -> bool:

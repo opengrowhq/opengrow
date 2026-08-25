@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -6,25 +7,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.version import API_VERSION
 from app.core.authz import authz_client
-from app.core.rate_limit import client_key, rate_limiter
 from app.core.minio_client import ensure_buckets
 from app.core.qdrant import ensure_collections
+from app.core.rate_limit import client_key, rate_limiter
 from app.routers import (
     analytics,
     api_keys,
     assets,
     audit,
     auth,
+    billing,
     brands,
     content,
     generations,
     health,
+    invites,
     mcp,
     orchestrator,
+    playbooks,
     usage,
 )
+from app.version import API_VERSION
 
 
 @asynccontextmanager
@@ -103,6 +107,9 @@ app.include_router(brands.router, prefix="/brands", tags=["brands"])
 app.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 app.include_router(api_keys.router, prefix="/api-keys", tags=["api-keys"])
 app.include_router(usage.router, prefix="/usage", tags=["usage"])
+app.include_router(billing.router, prefix="/billing", tags=["billing"])
 app.include_router(mcp.router, prefix="/mcp", tags=["mcp"])
 app.include_router(orchestrator.router, prefix="/orchestrator", tags=["orchestrator"])
+app.include_router(playbooks.router, prefix="/playbooks", tags=["playbooks"])
+app.include_router(invites.router, prefix="/invites", tags=["invites"])
 app.include_router(audit.router, prefix="/audit", tags=["audit"])

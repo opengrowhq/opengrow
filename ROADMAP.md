@@ -12,7 +12,7 @@
 
 ## Status: Pre-Alpha (v0.1.0)
 
-Auth, asset upload, AI generation, the full content lifecycle, GitHub PR publishing, and revenue attribution are in place, with a tenant-scoped Next.js app at `/app/[slug]`. The API is now first-class: API keys for headless access, an MCP server for AI agents, usage metering, optional rate limiting, multi-channel publishing (WordPress/Ghost), and an orchestrator run endpoint. See `services/fastapi-core/docs/API.md`.
+Auth, asset upload, AI generation, the full content lifecycle, GitHub PR publishing, and revenue attribution are in place, with a tenant-scoped Next.js app at `/app/[slug]`. The API is now first-class: API keys for headless access, an MCP server for AI agents, usage metering, optional rate limiting, multi-channel publishing (WordPress/Ghost), and an orchestrator run endpoint. The orchestrator now runs the full content cycle end to end — keyword research, versioned playbooks, a quality gate, scheduled auto-publish, and attribution-driven recommendations that can start the next run themselves. See `services/fastapi-core/docs/API.md`.
 
 ## Where we're headed
 
@@ -41,11 +41,14 @@ company context → generated content → GitHub PR → published URL → traffi
 - Polish the pages/slugs dashboard into the primary workspace surface
 - Harden in-app GitHub PR publishing UX: token configuration state, path/branch controls, PR metadata, publication history, and merge-to-`PUBLISHED` refresh are in place
 - Keep Markdown export as the smallest useful publishing primitive
+- **Orchestrator content cycle — shipped.** One call (`POST /orchestrator/runs`) now runs keyword research (skipped if you already have a keyword) → outline → optional human-approval pause → draft → a quality gate (regenerates a low-scoring draft with feedback before it's ever promoted) → promote → guarded publish.
+- **Versioned playbooks — shipped.** Tenant-customizable system prompts for outline/draft/generic-copy generation (`/playbooks`), falling back to a global then built-in default.
 
-- Revenue event model, first-party tracking pixel/conversion capture, conversion examples, embed-code UX, tracking install status, deduped aggregate manual/GA4/GSC import, tenant attribution summary, time-windowed executive funnel metrics, charted previous-period trend deltas, per-content/source/channel trend charts, attribution recommendations, per-content cards, channel/source breakdowns, connector setup records, Google OAuth start URLs, callback token exchange, connector sync state, Google API row mapping, refresh-token renewal, and daily connector cadence are in place
-- Attribution dashboard polish and richer executive attribution views
-- **Revenue attribution** — next is final dashboard QA and then content calendar scheduling depth
-- Basic content calendar focused on status and next action is in place; next is import-driven scheduling and channel-specific tasks
+- Revenue event model, first-party tracking pixel/conversion capture, conversion examples, embed-code UX, tracking install status, deduped aggregate manual/GA4/GSC import, tenant attribution summary, time-windowed executive funnel metrics, charted previous-period trend deltas, per-content/source/channel trend charts, per-content cards, channel/source breakdowns, connector setup records, Google OAuth start URLs, callback token exchange, connector sync state, Google API row mapping, refresh-token renewal, and daily connector cadence are in place
+- **Real attribution recommendations — shipped.** A daily sweep flags decaying published content to refresh, growing content to double down on, and topic gaps worth writing about (a tag touched by only one published piece), computed from real trend data (`/analytics/recommendations`), replacing the old rule-based client-side-only panel. `POST .../start-run` turns a suggestion straight into a new orchestrator run — the loop closes for real, not just as a diagram. Recommendations now render directly in the Analytics dashboard.
+- **Tenant-owned Stripe revenue sync — shipped.** Connect your own Stripe account (BYOK, separate from OpenGrow's own billing) so `charge.succeeded` events attribute revenue back to content automatically.
+- Richer executive attribution views — next
+- **Content calendar scheduling — shipped.** Set a due date + publish target on a piece and it publishes itself once approved and due, through the same channel adapters as a manual publish.
 
 ### Later: broaden channels
 - WordPress, Ghost, Webflow adapters — **shipped** (via `POST /content/{id}/publish`); Hugo and plain HTML adapters next
@@ -63,7 +66,7 @@ company context → generated content → GitHub PR → published URL → traffi
 
 ## Deliberately delayed
 
-- Full orchestrator agent before GitHub PR publishing works end-to-end
+- Full orchestrator agent before GitHub PR publishing worked end-to-end — sequencing done; the orchestrator (keyword research → outline → draft → quality gate → promote → publish → recommendations) is now built on top of a proven publishing wedge, not ahead of it
 - Broad CMS/social integrations before the GitHub-native wedge converts users
 - Treating GitHub PR publishing as the full product instead of the first channel
 - Enterprise SSO before commercial demand exists

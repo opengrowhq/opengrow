@@ -47,6 +47,14 @@ vi.mock("../hooks", () => ({
   useSyncAnalyticsConnector: () => ({ mutate: vi.fn(), isPending: false }),
   useCreateRevenueEvent: () => ({ mutate: vi.fn(), isPending: false }),
   useImportAnalyticsEvents: () => ({ mutate: vi.fn(), isPending: false }),
+  useImportAnalyticsEventsCsv: () => ({ mutate: vi.fn(), isPending: false }),
+  useRecommendations: () => ({ data: [], isLoading: false, error: undefined }),
+  useDismissRecommendation: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
+  useStartRunFromRecommendation: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+  }),
 }));
 
 import { AnalyticsDashboard } from "./analytics-dashboard";

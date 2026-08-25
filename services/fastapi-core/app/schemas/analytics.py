@@ -3,6 +3,26 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 
+class TenantStripeCredentialUpsert(BaseModel):
+    secret_key: str = Field(min_length=1)
+    webhook_secret: str = Field(min_length=1)
+    display_name: str | None = Field(default=None, max_length=120)
+
+    @field_validator("secret_key", "webhook_secret", "display_name", mode="before")
+    @classmethod
+    def strip_strings(cls, value: str | None) -> str | None:
+        if value is None or not isinstance(value, str):
+            return value
+        return value.strip() or None
+
+
+class TenantStripeConfigOut(BaseModel):
+    configured: bool
+    secret_key_last4: str | None = None
+    display_name: str | None = None
+    webhook_url: str | None = None
+
+
 class RevenueEventCreate(BaseModel):
     event_type: str
     content_piece_id: str | None = None
@@ -97,6 +117,18 @@ class TrackingStatusOut(BaseModel):
     first_party_visits: int
     first_party_conversions: int
     last_seen_at: datetime | None = None
+
+
+class ContentRecommendationOut(BaseModel):
+    id: str
+    kind: str
+    content_piece_id: str | None = None
+    title: str
+    rationale: str
+    score: float
+    status: str
+    orchestrator_run_id: str | None = None
+    created_at: datetime
 
 
 class ContentAttributionOut(AttributionSummaryOut):

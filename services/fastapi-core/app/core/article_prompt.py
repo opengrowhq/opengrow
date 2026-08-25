@@ -92,7 +92,10 @@ def _system(base: str, brand: dict | None) -> dict:
 
 
 def compose_outline_prompt(
-    brief: dict, brand: dict | None = None, context: list[dict] | None = None
+    brief: dict,
+    brand: dict | None = None,
+    context: list[dict] | None = None,
+    system_template: str | None = None,
 ) -> list[dict]:
     user = [
         f"Plan an article with {brief.get('sections_target', 5)} sections.",
@@ -103,7 +106,7 @@ def compose_outline_prompt(
     if ctx:
         user += ["", ctx]
     return [
-        _system(_OUTLINE_SYSTEM, brand),
+        _system(system_template or _OUTLINE_SYSTEM, brand),
         {"role": "user", "content": "\n".join(user)},
     ]
 
@@ -113,6 +116,7 @@ def compose_draft_prompt(
     outline: list[dict],
     brand: dict | None = None,
     context: list[dict] | None = None,
+    system_template: str | None = None,
 ) -> list[dict]:
     rendered = []
     for section in outline or []:
@@ -130,4 +134,7 @@ def compose_draft_prompt(
     ctx = _context_block(context)
     if ctx:
         user += ["", ctx]
-    return [_system(_DRAFT_SYSTEM, brand), {"role": "user", "content": "\n".join(user)}]
+    return [
+        _system(system_template or _DRAFT_SYSTEM, brand),
+        {"role": "user", "content": "\n".join(user)},
+    ]

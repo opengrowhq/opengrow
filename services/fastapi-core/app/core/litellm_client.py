@@ -65,7 +65,10 @@ async def chat_completion(
     model: str = "gpt-4o-mini",
     max_tokens: int = 2000,
     temperature: float = 0.7,
-) -> str:
+) -> tuple[str, dict]:
+    """Returns (content, raw_response). The raw response (real token usage +
+    model) is needed by callers that settle real-cost billing via
+    litellm.completion_cost() — see app.core.credits."""
     if settings.LITELLM_MODE == "library":
         _library_env()
         from litellm import acompletion
@@ -76,7 +79,8 @@ async def chat_completion(
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        return resp["choices"][0]["message"]["content"]
+        resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else dict(resp)
+        return resp_dict["choices"][0]["message"]["content"], resp_dict
 
     # proxy mode
     import httpx
@@ -93,4 +97,5 @@ async def chat_completion(
             headers=_headers(),
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        resp_json = resp.json()
+        return resp_json["choices"][0]["message"]["content"], resp_json

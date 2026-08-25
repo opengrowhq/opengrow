@@ -207,8 +207,19 @@ async def test_resume_rejects_non_failed_run(client, tenant_factory, no_celery):
 # ---- Pipeline logic (sync, LLM monkeypatched) -----------------------------
 
 
-def _seed_run(sync_db, brief="Write a launch post"):
-    tenant = Tenant(id=uuid4(), slug=f"orch-{uuid4().hex[:8]}", name="Orch")
+def _seed_run(
+    sync_db,
+    brief="Write a launch post",
+    billing_plan="free",
+    credit_balance_cents=0,
+):
+    tenant = Tenant(
+        id=uuid4(),
+        slug=f"orch-{uuid4().hex[:8]}",
+        name="Orch",
+        billing_plan=billing_plan,
+        credit_balance_cents=credit_balance_cents,
+    )
     sync_db.add(tenant)
     sync_db.commit()
     user = User(
@@ -234,7 +245,9 @@ def _seed_run(sync_db, brief="Write a launch post"):
 
 def test_execute_run_generates_and_promotes(sync_db, monkeypatch):
     monkeypatch.setattr(
-        orchestrator, "_generate_text", lambda brief, model: "generated body copy"
+        orchestrator,
+        "_generate_text",
+        lambda db, gen, brief, model: "generated body copy",
     )
     run = _seed_run(sync_db)
 
@@ -261,7 +274,9 @@ def test_execute_run_auto_publishes_when_configured(sync_db, monkeypatch):
     from app.models.content_piece import ContentStatus
     from app.models.publication import Publication
 
-    monkeypatch.setattr(orchestrator, "_generate_text", lambda brief, model: "body")
+    monkeypatch.setattr(
+        orchestrator, "_generate_text", lambda db, gen, brief, model: "body"
+    )
     published = {}
 
     def fake_publish(channel, title, body, config):
@@ -288,7 +303,7 @@ def test_execute_run_auto_publishes_when_configured(sync_db, monkeypatch):
 
 
 def test_execute_run_marks_failed_on_llm_error(sync_db, monkeypatch):
-    def boom(brief, model):
+    def boom(db, gen, brief, model):
         raise RuntimeError("llm down")
 
     monkeypatch.setattr(orchestrator, "_generate_text", boom)
@@ -305,11 +320,27 @@ def test_execute_run_marks_failed_on_llm_error(sync_db, monkeypatch):
 # ---- Article pipeline (design C): pause, resume, guarded publish ----------
 
 
-def _seed_article_run(sync_db, pause=True, auto_approve=False, publish_channel=None):
-    run = _seed_run(sync_db, brief="Article about compounding")
+def _seed_article_run(
+    sync_db,
+    pause=True,
+    auto_approve=False,
+    publish_channel=None,
+    billing_plan="free",
+    credit_balance_cents=0,
+):
+    run = _seed_run(
+        sync_db,
+        brief="Article about compounding",
+        billing_plan=billing_plan,
+        credit_balance_cents=credit_balance_cents,
+    )
     run.details = {
         "article": {
             "topic": "Compounding",
+            # Explicit keyword: skips the keyword_research step (which would
+            # otherwise make a real outbound HTTP call) — see the dedicated
+            # test_execute_run_keyword_research_* tests below for that step.
+            "primary_keyword": "compounding",
             "length_words": 800,
             "slug": "compounding",
             "tags": ["seo"],
@@ -323,7 +354,27 @@ def _seed_article_run(sync_db, pause=True, auto_approve=False, publish_channel=N
     return run
 
 
-def _fake_article_llm(monkeypatch, fail_on_kind=None):
+_GOOD_DRAFT = (
+    "## Intro\n"
+    "Compounding is one of the most powerful forces in personal finance, and "
+    "understanding compounding early changes how you plan for the long run. "
+    "This guide walks through why compounding matters and how to use it.\n\n"
+    "## Body\n"
+    "Small, consistent contributions compound over time into large outcomes. "
+    "The earlier you start, the more time compounding has to work in your favor, "
+    "and even modest amounts add up meaningfully across a couple of decades."
+)
+
+
+def _fake_article_llm(monkeypatch, fail_on_kind=None, draft_text=_GOOD_DRAFT):
+    """draft_text defaults to a fixture that clears the quality gate
+    (keyword/heading coverage, length, readability) so existing pipeline
+    tests exercise promote/publish rather than the gate itself — see the
+    dedicated test_execute_run_score_gate_* tests below for gate behavior.
+
+    The draft "follows" whatever outline it's given (mirrors each section's
+    heading into the draft) so a test that edits the approved outline still
+    gets a draft whose headings match it, same as a real LLM would."""
     calls = []
 
     def fake(db, gen, model):
@@ -333,7 +384,13 @@ def _fake_article_llm(monkeypatch, fail_on_kind=None):
             raise RuntimeError(f"llm down during {kind}")
         if kind == "article_outline":
             return "## Intro\n- hook\n\n## Body\n- point"
-        return "# Draft body"
+        outline = (gen.metadata_json or {}).get("outline") or []
+        if outline:
+            body = "\n\n".join(
+                f"## {s['heading']}\n{draft_text}" for s in outline
+            )
+            return body
+        return draft_text
 
     monkeypatch.setattr(orchestrator, "_generate_article", fake)
     return calls
@@ -384,7 +441,7 @@ def test_article_run_pauses_then_completes_after_approval(sync_db, monkeypatch):
     cp = sync_db.get(ContentPiece, run.content_piece_id)
     assert cp.format == "blog_post"
     assert cp.status.value == "DRAFT"
-    assert cp.body == "# Draft body"
+    assert "## Edited" in cp.body  # draft followed the edited outline
     assert cp.metadata_json["article"]["slug"] == "compounding"
 
 
@@ -467,3 +524,412 @@ def test_article_failed_run_resumes_at_the_failing_step(sync_db, monkeypatch):
     gens = _generations(sync_db, run)
     assert len(gens) == 2
     assert calls == ["article_outline", "article_draft"]
+
+
+# ---- Credit gating: orchestrator-driven generations must be billed, same
+# as app.routers.generations.create_generation (see feature/orchestrator-
+# credit-gating) --------------------------------------------------------
+
+
+def test_legacy_run_holds_and_settles_credits_on_pro_tenant(sync_db, monkeypatch):
+    from app.models.generation import Generation
+
+    async def _fake_chat_completion(**kwargs):
+        return "generated body copy", {
+            "model": "gpt-4o-mini",
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 50,
+                "total_tokens": 100,
+            },
+            "choices": [],
+        }
+
+    monkeypatch.setattr(orchestrator, "chat_completion", _fake_chat_completion)
+    run = _seed_run(sync_db, billing_plan="pro", credit_balance_cents=100)
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    tenant = sync_db.get(Tenant, run.tenant_id)
+    # Held some positive amount up front, then the tiny fake completion's
+    # real cost rounds to ~0c, so nearly the full hold is refunded back.
+    assert 0 < tenant.credit_balance_cents <= 100
+
+    gen = sync_db.get(Generation, run.generation_id)
+    assert gen.status == GenerationStatus.COMPLETE
+    # The hold marker is cleared once settled (idempotent re-entry guard).
+    assert "credit_hold_cents" not in (gen.metadata_json or {})
+
+
+def test_legacy_run_refunds_full_hold_on_llm_failure(sync_db, monkeypatch):
+    from app.models.generation import Generation
+
+    async def _failing_chat_completion(**kwargs):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(orchestrator, "chat_completion", _failing_chat_completion)
+    run = _seed_run(sync_db, billing_plan="pro", credit_balance_cents=100)
+
+    with pytest.raises(RuntimeError):
+        orchestrator.execute_run(sync_db, run.id)
+
+    sync_db.refresh(run)
+    tenant = sync_db.get(Tenant, run.tenant_id)
+    assert tenant.credit_balance_cents == 100  # fully refunded, nothing charged
+
+    gen = sync_db.get(Generation, run.generation_id)
+    assert gen.status == GenerationStatus.FAILED
+    assert "credit_hold_cents" not in (gen.metadata_json or {})
+
+
+def test_legacy_run_free_tenant_is_not_credit_gated(sync_db, monkeypatch):
+    monkeypatch.setattr(
+        orchestrator, "_generate_text", lambda db, gen, brief, model: "body"
+    )
+    run = _seed_run(sync_db, billing_plan="free", credit_balance_cents=0)
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    tenant = sync_db.get(Tenant, run.tenant_id)
+    assert tenant.credit_balance_cents == 0  # never touched
+
+
+def _fake_chat_completion_for_article(fail_on_model_call=None):
+    """Distinguishes outline vs. draft by the system prompt content, not by
+    call count — a naive counter breaks across execute_run re-entries when a
+    fresh fake (its own counter starting at 0) is installed mid-test, which
+    would silently score the outline text as if it were the draft once the
+    quality gate started actually reading draft_text."""
+    calls = {"n": 0}
+
+    async def _fake(**kwargs):
+        calls["n"] += 1
+        if fail_on_model_call == calls["n"]:
+            raise RuntimeError(f"llm down on call {calls['n']}")
+        system = (kwargs.get("messages") or [{}])[0].get("content", "")
+        is_outline = "content strategist" in system  # see _OUTLINE_SYSTEM
+        # The draft text must clear the quality gate (see _GOOD_DRAFT above)
+        # or these credit-math tests would get an unexpected extra retry
+        # generation and their `len(gens) == 2` assertions would break.
+        text = "## Intro\n- hook\n\n## Body\n- point" if is_outline else _GOOD_DRAFT
+        return text, {
+            "model": "gpt-4o-mini",
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 50,
+                "total_tokens": 100,
+            },
+            "choices": [],
+        }
+
+    return _fake, calls
+
+
+def test_article_run_holds_and_settles_credits_on_pro_tenant(sync_db, monkeypatch):
+    fake, _ = _fake_chat_completion_for_article()
+    monkeypatch.setattr(orchestrator, "chat_completion", fake)
+    run = _seed_article_run(
+        sync_db, pause=False, billing_plan="pro", credit_balance_cents=100
+    )
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    tenant = sync_db.get(Tenant, run.tenant_id)
+    # Two generations (outline + draft) were each held then settled — some
+    # credits were spent and some refunded, balance stays below the start.
+    assert 0 < tenant.credit_balance_cents <= 100
+
+    gens = _generations(sync_db, run)
+    assert len(gens) == 2
+    for g in gens:
+        assert "credit_hold_cents" not in (g.metadata_json or {})
+
+
+def test_article_run_retry_after_failure_holds_its_own_credits_not_free_or_doubled(
+    sync_db, monkeypatch
+):
+    """Regression test for the bug this branch fixes: a failed generation's
+    hold must be refunded exactly once (not once per retry attempt, like the
+    Celery-level bug fixed in app.workers.tasks.run_generation), AND a
+    retried attempt on the same row must get its own fresh hold rather than
+    running unbilled just because the first hold was already refunded."""
+    from app.models.generation import Generation
+
+    fake, calls = _fake_chat_completion_for_article(fail_on_model_call=2)
+    monkeypatch.setattr(orchestrator, "chat_completion", fake)
+    run = _seed_article_run(
+        sync_db, pause=False, billing_plan="pro", credit_balance_cents=100
+    )
+
+    with pytest.raises(RuntimeError):
+        orchestrator.execute_run(sync_db, run.id)
+
+    sync_db.refresh(run)
+    tenant = sync_db.get(Tenant, run.tenant_id)
+    gens = _generations(sync_db, run)
+    assert len(gens) == 2  # outline settled, draft created+failed
+    outline_gen, draft_gen = gens
+    assert outline_gen.status == GenerationStatus.COMPLETE
+    assert draft_gen.status == GenerationStatus.FAILED
+    # Outline was held+settled (refunded to ~0 real cost); draft's hold was
+    # refunded in full on failure — balance should be back near the start,
+    # not below it (no uncollected charge) and not above it (no over-refund).
+    assert 0 < tenant.credit_balance_cents <= 100
+    balance_after_failure = tenant.credit_balance_cents
+
+    # Re-enter (simulates a Celery retry of run_orchestrator): the draft
+    # generation is retried on the SAME row.
+    fake2, _ = _fake_chat_completion_for_article()
+    monkeypatch.setattr(orchestrator, "chat_completion", fake2)
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    sync_db.refresh(tenant)
+    assert run.status == OrchestratorRunStatus.COMPLETE
+    gens_after = _generations(sync_db, run)
+    assert len(gens_after) == 2  # still the same two rows, no duplicate outline
+    assert gens_after[1].id == draft_gen.id
+    assert gens_after[1].status == GenerationStatus.COMPLETE
+    # The retry's own hold was debited and then settled — balance moved
+    # (not identical to balance_after_failure, proving the retry was
+    # actually billed, not a free ride), and never went negative/wrong.
+    assert 0 < tenant.credit_balance_cents <= balance_after_failure
+
+
+# ---- Quality gate: score → promote, score → retry-with-feedback, or fail --
+
+
+def test_execute_run_score_gate_promotes_a_good_draft(sync_db, monkeypatch):
+    _fake_article_llm(monkeypatch)
+    run = _seed_article_run(sync_db, pause=False)
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    assert run.status == OrchestratorRunStatus.COMPLETE
+    assert run.details["score"] >= orchestrator.settings.ARTICLE_SCORE_THRESHOLD
+    assert run.details["score_retries"] == 0
+    assert len(_generations(sync_db, run)) == 2  # no extra retry generation
+
+
+def test_execute_run_score_gate_retries_then_promotes(sync_db, monkeypatch):
+    """A low-scoring first draft is regenerated with feedback; the second
+    (good) draft passes and the run completes — exercising one full
+    retry loop within a single execute_run call, plus billing for both
+    the failed and the successful draft attempts."""
+    calls = {"n": 0}
+
+    def fake(db, gen, model):
+        kind = (gen.metadata_json or {}).get("kind")
+        if kind == "article_outline":
+            return "## Intro\n- hook\n\n## Body\n- point"
+        calls["n"] += 1
+        return "bad" if calls["n"] == 1 else _GOOD_DRAFT
+
+    monkeypatch.setattr(orchestrator, "_generate_article", fake)
+    run = _seed_article_run(sync_db, pause=False)
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    assert run.status == OrchestratorRunStatus.COMPLETE
+    assert run.details["score_retries"] == 1
+    assert calls["n"] == 2  # first bad draft, one regenerate
+
+    gens = _generations(sync_db, run)
+    assert len(gens) == 3  # outline + failed-gate draft + passing draft
+    kinds = [g.metadata_json["kind"] for g in gens]
+    assert kinds == ["article_outline", "article_draft", "article_draft"]
+    # feedback was folded into the retried brief's notes
+    assert gens[2].metadata_json["article"]["notes"]
+
+    cp = sync_db.get(ContentPiece, run.content_piece_id)
+    assert cp.body == _GOOD_DRAFT
+    assert cp.source_generation_id == gens[2].id  # the passing attempt, not the failed one
+
+
+def test_execute_run_score_gate_fails_after_max_retries(sync_db, monkeypatch):
+    monkeypatch.setattr(
+        orchestrator, "_generate_article", lambda db, gen, model: (
+            "## Intro\n- hook\n\n## Body\n- point"
+            if (gen.metadata_json or {}).get("kind") == "article_outline"
+            else "bad"
+        ),
+    )
+    run = _seed_article_run(sync_db, pause=False)
+
+    with pytest.raises(orchestrator.QualityGateFailed):
+        orchestrator.execute_run(sync_db, run.id)
+
+    sync_db.refresh(run)
+    assert run.status == OrchestratorRunStatus.FAILED
+    assert "scored" in run.error_message
+    assert run.details["score_retries"] == orchestrator.settings.ARTICLE_SCORE_MAX_RETRIES
+    # outline + one draft attempt per retry budget slot (initial + retries)
+    assert (
+        len(_generations(sync_db, run))
+        == 1 + orchestrator.settings.ARTICLE_SCORE_MAX_RETRIES + 1
+    )
+    # never promoted
+    assert run.content_piece_id is None
+
+
+def test_execute_run_score_gate_reentry_at_score_step(sync_db, monkeypatch):
+    """Simulates a crash between _step_draft committing step="score" and
+    _step_score running — execute_run must still run the gate, not skip
+    straight through to done."""
+    _fake_article_llm(monkeypatch)
+    run = _seed_article_run(sync_db, pause=False)
+    run.status = OrchestratorRunStatus.QUEUED
+    run.step = "outline"
+    sync_db.commit()
+
+    # Drive it manually up to right after the draft LLM call, mimicking a
+    # crash: force run.step to "score" with a draft already in details but
+    # never actually invoke _step_score.
+    from app.models.generation import Generation
+
+    outline_gen = Generation(
+        id=uuid4(),
+        tenant_id=run.tenant_id,
+        owner_id=run.user_id,
+        brief="Compounding",
+        status=GenerationStatus.COMPLETE,
+        metadata_json={"kind": "article_outline"},
+        result="## Intro\n- hook\n\n## Body\n- point",
+    )
+    draft_gen = Generation(
+        id=uuid4(),
+        tenant_id=run.tenant_id,
+        owner_id=run.user_id,
+        brief="Compounding",
+        status=GenerationStatus.COMPLETE,
+        metadata_json={"kind": "article_draft"},
+        result=_GOOD_DRAFT,
+    )
+    sync_db.add_all([outline_gen, draft_gen])
+    sync_db.commit()
+    run.details = {
+        "article": {"topic": "Compounding", "length_words": 800},
+        "pause_for_outline_approval": False,
+        "auto_approve": False,
+        "outline_gen_id": str(outline_gen.id),
+        "outline_text": outline_gen.result,
+        "sections": [{"heading": "Intro", "points": ["hook"]}],
+        "draft_gen_id": str(draft_gen.id),
+        "draft_text": draft_gen.result,
+    }
+    run.generation_id = draft_gen.id
+    run.step = "score"
+    sync_db.commit()
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    assert run.status == OrchestratorRunStatus.COMPLETE
+    assert "score" in run.details  # the gate actually ran, not skipped
+    assert run.content_piece_id is not None
+
+
+# ---- Keyword research: real pipeline entrypoint (Phase 3) ------------------
+
+
+def _seed_article_run_no_keyword(sync_db, **kwargs):
+    """Like _seed_article_run but WITHOUT a primary_keyword, so the new
+    keyword_research step actually fires instead of being skipped."""
+    run = _seed_article_run(sync_db, **kwargs)
+    article = dict(run.details["article"])
+    article.pop("primary_keyword", None)
+    run.details = {**run.details, "article": article}
+    sync_db.commit()
+    return run
+
+
+def test_execute_run_skips_keyword_research_when_keyword_already_set(
+    sync_db, monkeypatch
+):
+    """The common/default case: a caller that already knows its keyword
+    never triggers a network call — zero behavior change from before this
+    step existed."""
+    called = {"n": 0}
+
+    def fake_research(topic):
+        called["n"] += 1
+        return {"primary_keyword": "x", "secondary_keywords": [], "questions": []}
+
+    monkeypatch.setattr(orchestrator, "research_keywords", fake_research)
+    _fake_article_llm(monkeypatch)
+    run = _seed_article_run(sync_db, pause=False)  # has primary_keyword="compounding"
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+    assert called["n"] == 0
+
+
+def test_execute_run_researches_keyword_when_blank(sync_db, monkeypatch):
+    def fake_research(topic):
+        assert topic == "Compounding"
+        return {
+            "primary_keyword": "compounding",
+            "secondary_keywords": ["compound growth"],
+            "questions": ["How does compounding work?"],
+            "sources": {},
+        }
+
+    monkeypatch.setattr(orchestrator, "research_keywords", fake_research)
+    _fake_article_llm(monkeypatch)
+    run = _seed_article_run_no_keyword(sync_db, pause=False)
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    assert run.details["article"]["primary_keyword"] == "compounding"
+    assert "compound growth" in run.details["article"]["secondary_keywords"]
+    assert run.details["keyword_research"]["primary_keyword"] == "compounding"
+
+
+def test_execute_run_keyword_research_is_idempotent_on_reentry(sync_db, monkeypatch):
+    calls = {"n": 0}
+
+    def fake_research(topic):
+        calls["n"] += 1
+        return {
+            "primary_keyword": "compounding",
+            "secondary_keywords": [],
+            "questions": [],
+        }
+
+    monkeypatch.setattr(orchestrator, "research_keywords", fake_research)
+    _fake_article_llm(monkeypatch, fail_on_kind="article_outline")
+    run = _seed_article_run_no_keyword(sync_db, pause=False)
+
+    with pytest.raises(RuntimeError):
+        orchestrator.execute_run(sync_db, run.id)
+
+    assert calls["n"] == 1  # research already ran before the outline failed
+
+    _fake_article_llm(monkeypatch)  # fix the LLM, re-enter
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+    assert calls["n"] == 1  # not re-run on retry — keyword_research already present
+
+
+def test_execute_run_keyword_research_failure_falls_back_to_topic(sync_db, monkeypatch):
+    """Best-effort: if every scraping source fails, the run must still
+    proceed (with primary_keyword defaulted to the bare topic) rather than
+    blocking the pipeline on Google/Bing being unreachable. Exercises the
+    real research_keywords()'s own internal try/except (not a fake that
+    bypasses it), by breaking its actual HTTP dependency instead."""
+
+    def boom(*a, **k):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("app.core.keyword_research.fetch_url", boom)
+    _fake_article_llm(monkeypatch)
+    run = _seed_article_run_no_keyword(sync_db, pause=False)
+
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    assert run.details["article"]["primary_keyword"] == "Compounding"  # falls back to topic

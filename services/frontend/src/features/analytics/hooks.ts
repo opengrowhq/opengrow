@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { loadToken } from "@/lib/auth";
 import {
+  type AnalyticsImportProvider,
   type AnalyticsWindow,
   createRevenueEvent,
   createAnalyticsConnector,
@@ -19,8 +20,12 @@ import {
   getSourceTrends,
   getTrackingStatus,
   importAnalyticsEvents,
+  importAnalyticsEventsCsv,
   listAnalyticsConnectors,
   syncAnalyticsConnector,
+  listRecommendations,
+  dismissRecommendation,
+  startRunFromRecommendation,
 } from "./api";
 
 const hasToken = () => !!loadToken();
@@ -113,6 +118,20 @@ export function useImportAnalyticsEvents() {
   });
 }
 
+export function useImportAnalyticsEventsCsv() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      file,
+      provider,
+    }: {
+      file: File;
+      provider?: AnalyticsImportProvider;
+    }) => importAnalyticsEventsCsv(file, provider),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["analytics"] }),
+  });
+}
+
 export function useAnalyticsConnectors() {
   return useQuery({
     queryKey: ["analytics", "connectors"],
@@ -157,5 +176,29 @@ export function useSyncAnalyticsConnector() {
   return useMutation({
     mutationFn: syncAnalyticsConnector,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["analytics", "connectors"] }),
+  });
+}
+
+export function useRecommendations(status: string = "PENDING") {
+  return useQuery({
+    queryKey: ["analytics", "recommendations", status],
+    queryFn: () => listRecommendations(status),
+    enabled: hasToken(),
+  });
+}
+
+export function useDismissRecommendation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: dismissRecommendation,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["analytics", "recommendations"] }),
+  });
+}
+
+export function useStartRunFromRecommendation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: startRunFromRecommendation,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["analytics", "recommendations"] }),
   });
 }
