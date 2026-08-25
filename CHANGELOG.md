@@ -37,9 +37,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `POST .../start-run` turns a recommendation directly into a new
   orchestrator run, closing the content → attribution → next-content loop
   for real.
+- `NEW_TOPIC` recommendations: the daily sweep also flags topic gaps — a
+  tag that shows up on only one published piece — as a third suggestion
+  kind, scored below the trend-backed REFRESH/DOUBLE_DOWN signals since it's
+  co-occurrence-only, not attribution data.
+- Recommendations are now visible in the Analytics dashboard (previously
+  API/MCP-only): a panel lists pending suggestions with their rationale and
+  Dismiss / Start-run actions, alongside the existing rule-based "Next
+  moves" nudges.
 - Tenant-owned Stripe revenue sync (`/analytics/stripe/*`): connect your own
   Stripe account (BYOK, separate from OpenGrow's own platform billing) so
   `charge.succeeded` events attribute revenue back to content automatically.
+
+**Platform**
+- MCP coverage for analytics connectors and recommendations
+  (`list_analytics_connectors`, `sync_analytics_connector`,
+  `list_recommendations`, `dismiss_recommendation`,
+  `start_run_from_recommendation`) and the article pipeline
+  (`create_article_run`, `approve_article_outline`) — an agent can now
+  drive the full research → outline → approve → draft → promote → publish
+  cycle, and the attribution → recommendation → next-run loop, without
+  leaving the MCP tool surface. 19 tools total.
 
 ## [0.1.0] — Pre-Alpha
 

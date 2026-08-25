@@ -62,11 +62,11 @@ The full loop runs locally today — **context → content → publish → attri
 - Manual + GA4 / GSC import and connector sync, with per-content / channel / source breakdowns and time-windowed trend deltas
 - **Tenant-owned Stripe revenue sync**: connect your own Stripe account (BYOK) and `charge.succeeded` events flow into attribution automatically, tied back to the content that drove them
 - Attribution summary tying content → pipeline → revenue
-- **Recommendations that close the loop**: a daily sweep flags decaying content to refresh and growing content to double down on, computed from real trend data (`/analytics/recommendations`) — one call turns a suggestion into a new orchestrator run
+- **Recommendations that close the loop**: a daily sweep flags decaying content to refresh, growing content to double down on, and topic gaps worth writing about (a tag touched by only one published piece), computed from real trend data (`/analytics/recommendations`) — visible in the Analytics dashboard, and one call turns a suggestion into a new orchestrator run
 
 **Platform**
 - First-class headless REST API: API keys (`X-API-Key`), `limit/offset` + `X-Total-Count` pagination, `GET /version` — reference in [`docs/API.md`](./services/fastapi-core/docs/API.md)
-- MCP server (`/mcp`) so agents (Claude Code, Cursor) can drive OpenGrow directly
+- MCP server (`/mcp`, 19 tools) so agents (Claude Code, Cursor) can drive OpenGrow directly — content, generations, the full article pipeline (research → outline → approve → draft), analytics connectors, and recommendations, all reusing the same REST logic
 - Single-call content cycle (`/orchestrator/runs`), per-tenant usage metering (`/usage`), optional rate limiting
 - Lite (personal, 5 services) and Production (multi-tenant, 15 services) from one codebase
 

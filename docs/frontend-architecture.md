@@ -234,11 +234,14 @@ queued daily by Celery beat. First-party visit and conversion capture is
 available through public pixel/track endpoints, with dashboard embed snippets for
 workspace or per-page installs, install-state checks, and selectable conversion
 examples. The workspace dashboard derives executive funnel metrics from
-time-windowed tenant summary data and renders recommendation cards from
-attribution signals. Previous-period trend deltas compare the selected window
-against the immediately preceding window and render paired current/previous bars.
-Content, source, and channel cards include compact current/previous trend bars.
-Next: final dashboard QA, then content calendar scheduling depth.
+time-windowed tenant summary data and renders a rule-based "Next moves" panel
+alongside a `RecommendationsPanel` backed by the real `/analytics/recommendations`
+engine (REFRESH for decaying content, DOUBLE_DOWN for growing content, NEW_TOPIC
+for tag-coverage gaps), with Dismiss and Start-run actions. Previous-period trend
+deltas compare the selected window against the immediately preceding window and
+render paired current/previous bars. Content, source, and channel cards include
+compact current/previous trend bars.
+Next: dashboard QA and richer executive attribution views.
 
 ### 9.8 Billing / Settings (later phase)
 Plans + the bottom-sheet Stripe checkout, usage & rollover credits, one-click cancel; workspace, members, brand, API keys (BYOK), theme.

@@ -45,9 +45,9 @@ company context → generated content → GitHub PR → published URL → traffi
 - **Versioned playbooks — shipped.** Tenant-customizable system prompts for outline/draft/generic-copy generation (`/playbooks`), falling back to a global then built-in default.
 
 - Revenue event model, first-party tracking pixel/conversion capture, conversion examples, embed-code UX, tracking install status, deduped aggregate manual/GA4/GSC import, tenant attribution summary, time-windowed executive funnel metrics, charted previous-period trend deltas, per-content/source/channel trend charts, per-content cards, channel/source breakdowns, connector setup records, Google OAuth start URLs, callback token exchange, connector sync state, Google API row mapping, refresh-token renewal, and daily connector cadence are in place
-- **Real attribution recommendations — shipped.** A daily sweep flags decaying published content to refresh and growing content to double down on, computed from real trend data (`/analytics/recommendations`), replacing the old rule-based client-side-only panel. `POST .../start-run` turns a suggestion straight into a new orchestrator run — the loop closes for real, not just as a diagram.
+- **Real attribution recommendations — shipped.** A daily sweep flags decaying published content to refresh, growing content to double down on, and topic gaps worth writing about (a tag touched by only one published piece), computed from real trend data (`/analytics/recommendations`), replacing the old rule-based client-side-only panel. `POST .../start-run` turns a suggestion straight into a new orchestrator run — the loop closes for real, not just as a diagram. Recommendations now render directly in the Analytics dashboard.
 - **Tenant-owned Stripe revenue sync — shipped.** Connect your own Stripe account (BYOK, separate from OpenGrow's own billing) so `charge.succeeded` events attribute revenue back to content automatically.
-- Attribution dashboard polish and richer executive attribution views — next
+- Richer executive attribution views — next
 - **Content calendar scheduling — shipped.** Set a due date + publish target on a piece and it publishes itself once approved and due, through the same channel adapters as a manual publish.
 
 ### Later: broaden channels
