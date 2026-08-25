@@ -44,15 +44,25 @@ The full loop runs locally today — **context → content → publish → attri
 - Brand/context asset upload → async processing (MinIO + Celery + embeddings; Qdrant in production)
 - AI generation from a brief, with uploaded assets as context — **bring your own** OpenAI / Anthropic / Google, or run **free & local with Ollama**
 - Content lifecycle: draft → review → approve → Markdown export, with status/next-action planning
+- Versioned **playbooks** — tenant-customizable system prompts for outline/draft/generic-copy generation, with fallback to a global default (`/playbooks`)
+
+**Orchestrate** — one call runs the whole content cycle end to end (`POST /orchestrator/runs`)
+- **Keyword research**: a bare topic gets a real primary/secondary keyword set via no-API-key scraping (Google Autocomplete + Bing SERP/PAA) — skipped automatically if you already supply a keyword
+- Outline → optional human-approval pause → draft, brand-conditioned and grounded in your uploaded assets
+- **Quality gate**: a draft that scores too low on keyword/heading coverage, length, and readability is regenerated with feedback before it's ever promoted — never silently publishes a weak draft
+- Promote → guarded publish, opt-in auto-approve
 
 **Publish**
 - **GitHub PR publishing** — the wedge: approve a piece and OpenGrow opens (or reuses) a reviewable pull request on your repo
-- More channels (BYOK) via `POST /content/{id}/publish`: WordPress, Ghost, Webflow, Email, X, LinkedIn
+- More channels (BYOK) via `POST /content/{id}/publish`: WordPress, Ghost, Webflow, Email, X, LinkedIn, Slack
+- **Content calendar with scheduled auto-publish**: set a `due_at` + publish target on a piece and an hourly sweep publishes it automatically once it's due and approved
 
 **Attribute**
 - First-party tracking pixel + conversion capture (VISIT / SIGNUP / LEAD / CUSTOMER / REVENUE), deduped by `external_id`
 - Manual + GA4 / GSC import and connector sync, with per-content / channel / source breakdowns and time-windowed trend deltas
+- **Tenant-owned Stripe revenue sync**: connect your own Stripe account (BYOK) and `charge.succeeded` events flow into attribution automatically, tied back to the content that drove them
 - Attribution summary tying content → pipeline → revenue
+- **Recommendations that close the loop**: a daily sweep flags decaying content to refresh and growing content to double down on, computed from real trend data (`/analytics/recommendations`) — one call turns a suggestion into a new orchestrator run
 
 **Platform**
 - First-class headless REST API: API keys (`X-API-Key`), `limit/offset` + `X-Total-Count` pagination, `GET /version` — reference in [`docs/API.md`](./services/fastapi-core/docs/API.md)
@@ -67,6 +77,8 @@ Most AI marketing tools stop at drafts, exports, rankings, or scheduled posts. O
 ```
 company context → generated content → publishing channel → traffic → conversion → revenue attribution → better next content
 ```
+
+This loop is not just a diagram — `POST /analytics/recommendations/{id}/start-run` closes it for real: a recommendation computed from real trend data starts a new orchestrator run.
 
 The first publishing channel is **GitHub PR-based publishing** because technical founders already trust reviewable pull requests for website and docs changes. The second wedge is **revenue attribution** because the product only becomes valuable when it learns which content created signups, pipeline, or revenue.
 
