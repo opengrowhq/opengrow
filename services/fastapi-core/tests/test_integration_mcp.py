@@ -2,12 +2,14 @@
 
 import json
 import uuid
+from uuid import UUID
 
 import pytest
 
 from app.config import settings
 from app.models.analytics_connector import AnalyticsConnectorStatus
 from app.models.content_recommendation import ContentRecommendation
+from app.models.orchestrator import OrchestratorRun, OrchestratorRunStatus
 
 # _StubAuthZClient.check() (app/core/authz.py) always returns True in
 # DEPLOYMENT_MODE=lite by design ("everything allowed, tenant isolation
@@ -87,6 +89,8 @@ async def test_initialize_and_tools_list(client, tenant_factory):
         "list_orchestrator_runs",
         "get_orchestrator_run",
         "create_orchestrator_run",
+        "create_article_run",
+        "approve_article_outline",
         "list_publications",
         "list_analytics_connectors",
         "sync_analytics_connector",
@@ -471,6 +475,194 @@ async def test_get_orchestrator_run_unknown_id(client, tenant_factory):
             "params": {
                 "name": "get_orchestrator_run",
                 "arguments": {"run_id": "00000000-0000-0000-0000-000000000000"},
+            },
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+# ---- Article pipeline (create_article_run / approve_article_outline) --
+
+
+async def test_tools_call_creates_article_run(
+    client, tenant_factory, allow_writer, no_celery
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 38,
+            "method": "tools/call",
+            "params": {
+                "name": "create_article_run",
+                "arguments": {
+                    "topic": "how to write good docs",
+                    "primary_keyword": "technical writing",
+                    "secondary_keywords": ["docs", "style guide"],
+                    "tags": ["writing"],
+                },
+            },
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is False
+    run = json.loads(result["content"][0]["text"])
+    assert run["status"] == "QUEUED"
+    assert run["brief"] == "how to write good docs"
+
+
+async def test_create_article_run_requires_topic(client, tenant_factory, allow_writer):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 39,
+            "method": "tools/call",
+            "params": {"name": "create_article_run", "arguments": {}},
+        },
+        headers=headers,
+    )
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+@requires_real_authz
+async def test_create_article_run_surfaces_403_as_a_soft_tool_error(
+    client, tenant_factory
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 40,
+            "method": "tools/call",
+            "params": {
+                "name": "create_article_run",
+                "arguments": {"topic": "x"},
+            },
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_tools_call_approves_article_outline(
+    client, db, tenant_factory, allow_writer, no_celery
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+    created = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 41,
+            "method": "tools/call",
+            "params": {
+                "name": "create_article_run",
+                "arguments": {"topic": "how to write good docs"},
+            },
+        },
+        headers=headers,
+    )
+    run_id = json.loads(created.json()["result"]["content"][0]["text"])["run_id"]
+
+    run = await db.get(OrchestratorRun, UUID(run_id))
+    run.status = OrchestratorRunStatus.AWAITING_OUTLINE_APPROVAL
+    await db.commit()
+
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "tools/call",
+            "params": {
+                "name": "approve_article_outline",
+                "arguments": {
+                    "run_id": run_id,
+                    "outline": [
+                        {"heading": "Intro", "points": ["why docs matter"]},
+                        {"heading": "Conclusion", "points": []},
+                    ],
+                },
+            },
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is False
+    body = json.loads(result["content"][0]["text"])
+    assert body["status"] == "QUEUED"
+    assert body["outline"] == [
+        {"heading": "Intro", "points": ["why docs matter"]},
+        {"heading": "Conclusion", "points": []},
+    ]
+
+
+async def test_approve_article_outline_rejects_wrong_status(
+    client, tenant_factory, allow_writer, no_celery
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+    created = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 43,
+            "method": "tools/call",
+            "params": {
+                "name": "create_article_run",
+                "arguments": {"topic": "how to write good docs"},
+            },
+        },
+        headers=headers,
+    )
+    run_id = json.loads(created.json()["result"]["content"][0]["text"])["run_id"]
+
+    # Run is QUEUED, not AWAITING_OUTLINE_APPROVAL yet.
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 44,
+            "method": "tools/call",
+            "params": {
+                "name": "approve_article_outline",
+                "arguments": {
+                    "run_id": run_id,
+                    "outline": [{"heading": "Intro", "points": []}],
+                },
+            },
+        },
+        headers=headers,
+    )
+    assert call.status_code == 200
+    result = call.json()["result"]
+    assert result["isError"] is True
+
+
+async def test_approve_article_outline_requires_outline(
+    client, tenant_factory, allow_writer
+):
+    headers, _ = await _key_headers(client, tenant_factory)
+    call = await client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 45,
+            "method": "tools/call",
+            "params": {
+                "name": "approve_article_outline",
+                "arguments": {"run_id": str(uuid.uuid4())},
             },
         },
         headers=headers,

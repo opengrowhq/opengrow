@@ -138,7 +138,7 @@ TOOLS: list[dict] = [
             "Start a new orchestrator run: generate from a brief, promote to a "
             "draft content piece, and optionally auto-publish. Runs async — poll "
             "get_orchestrator_run for progress. For the article pipeline "
-            "(outline -> approval -> draft), use the REST API directly."
+            "(outline -> approval -> draft), use create_article_run instead."
         ),
         "inputSchema": {
             "type": "object",
@@ -148,6 +148,79 @@ TOOLS: list[dict] = [
                 "title": {"type": "string"},
             },
             "required": ["brief"],
+        },
+    },
+    {
+        "name": "create_article_run",
+        "description": (
+            "Start an article-pipeline orchestrator run: keyword research "
+            "(skipped if primary_keyword is set) -> outline -> pause for "
+            "approval (unless auto_approve) -> draft -> promote -> guarded "
+            "publish. Runs async — poll get_orchestrator_run for progress; "
+            "once it reports status AWAITING_OUTLINE_APPROVAL, read its "
+            "outline field and call approve_article_outline to continue."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "Required — the article topic.",
+                },
+                "primary_keyword": {
+                    "type": "string",
+                    "description": "Skips automatic keyword research if set.",
+                },
+                "secondary_keywords": {"type": "array", "items": {"type": "string"}},
+                "audience": {"type": "string"},
+                "goal": {
+                    "type": "string",
+                    "description": "educate | compare | convert. Defaults to educate.",
+                },
+                "tone": {"type": "string"},
+                "length_words": {"type": "integer", "minimum": 1},
+                "sections_target": {"type": "integer", "minimum": 1},
+                "notes": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "brand_id": {"type": "string"},
+                "model": {"type": "string"},
+                "auto_approve": {
+                    "type": "boolean",
+                    "description": (
+                        "Skip the human-approval pause and draft immediately "
+                        "once the outline is ready. Defaults to false."
+                    ),
+                },
+            },
+            "required": ["topic"],
+        },
+    },
+    {
+        "name": "approve_article_outline",
+        "description": (
+            "Approve (optionally edited) outline sections for a run "
+            "currently AWAITING_OUTLINE_APPROVAL, resuming it into the "
+            "draft step. Runs async — poll get_orchestrator_run for progress."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string"},
+                "outline": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 15,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "heading": {"type": "string"},
+                            "points": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["heading"],
+                    },
+                },
+            },
+            "required": ["run_id", "outline"],
         },
     },
     {
@@ -452,6 +525,73 @@ async def _create_orchestrator_run(db: AsyncSession, user: User, args: dict) -> 
     return out.model_dump()
 
 
+_ARTICLE_BRIEF_FIELDS = (
+    "topic",
+    "primary_keyword",
+    "secondary_keywords",
+    "audience",
+    "goal",
+    "tone",
+    "length_words",
+    "sections_target",
+    "notes",
+    "tags",
+    "brand_id",
+)
+
+
+async def _create_article_run(db: AsyncSession, user: User, args: dict) -> dict:
+    # Same "reuse the real REST handler" precedent as create_generation/
+    # create_orchestrator_run — the article pipeline's brief/model/publish
+    # wiring is billing- and state-machine-critical, not worth re-deriving.
+    from pydantic import ValidationError
+
+    from app.routers.orchestrator import create_run
+    from app.schemas.article import ArticleBrief
+    from app.schemas.orchestrator import OrchestratorRunCreate
+
+    article_kwargs = {k: args[k] for k in _ARTICLE_BRIEF_FIELDS if k in args}
+    try:
+        article = ArticleBrief(**article_kwargs)
+    except ValidationError as e:
+        raise ValueError(str(e))
+
+    payload = OrchestratorRunCreate(
+        brief=article.topic,
+        model=args.get("model"),
+        article=article,
+        auto_approve=bool(args.get("auto_approve", False)),
+    )
+    out = await create_run(payload, user, db)
+    return out.model_dump()
+
+
+async def _approve_article_outline(db: AsyncSession, user: User, args: dict) -> dict:
+    from pydantic import ValidationError
+
+    from app.routers.orchestrator import approve_outline
+    from app.schemas.orchestrator import OutlineApproveIn
+
+    run_id = (args.get("run_id") or "").strip()
+    if not run_id:
+        raise ValueError("run_id is required")
+    try:
+        run_uuid = UUID(run_id)
+    except ValueError:
+        raise ValueError(f"Invalid run_id: {run_id}")
+
+    outline = args.get("outline")
+    if not outline:
+        raise ValueError("outline is required")
+    try:
+        payload = OutlineApproveIn(outline=outline)
+    except ValidationError as e:
+        raise ValueError(str(e))
+
+    out = await approve_outline(run_uuid, payload, user, db)
+    return out.model_dump()
+
+
 async def _list_publications(db: AsyncSession, user: User, args: dict) -> dict:
     limit = min(int(args.get("limit", 20) or 20), 100)
     row = await db.execute(
@@ -552,6 +692,8 @@ _HANDLERS = {
     "list_orchestrator_runs": _list_orchestrator_runs,
     "get_orchestrator_run": _get_orchestrator_run,
     "create_orchestrator_run": _create_orchestrator_run,
+    "create_article_run": _create_article_run,
+    "approve_article_outline": _approve_article_outline,
     "list_publications": _list_publications,
     "list_analytics_connectors": _list_analytics_connectors,
     "sync_analytics_connector": _sync_analytics_connector,
