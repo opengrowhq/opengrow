@@ -32,7 +32,7 @@ def _seed_tenant_user(sync_db):
     return tenant, user
 
 
-def _seed_published_piece(sync_db, tenant, user, title="Old post"):
+def _seed_published_piece(sync_db, tenant, user, title="Old post", tags=None):
     cp = ContentPiece(
         id=uuid.uuid4(),
         tenant_id=tenant.id,
@@ -40,6 +40,7 @@ def _seed_published_piece(sync_db, tenant, user, title="Old post"):
         title=title,
         body="body",
         status=ContentStatus.PUBLISHED,
+        metadata_json={"article": {"tags": tags}} if tags else None,
     )
     sync_db.add(cp)
     sync_db.commit()
@@ -72,9 +73,11 @@ def test_generates_refresh_recommendation_for_decaying_piece(sync_db):
     created = tasks._generate_recommendations_for_tenant(sync_db, tenant.id)
 
     assert created == 1
-    rec = sync_db.query(ContentRecommendation).filter(
-        ContentRecommendation.tenant_id == tenant.id
-    ).one()
+    rec = (
+        sync_db.query(ContentRecommendation)
+        .filter(ContentRecommendation.tenant_id == tenant.id)
+        .one()
+    )
     assert rec.kind == ContentRecommendationKind.REFRESH
     assert rec.content_piece_id == cp.id
     assert rec.status == ContentRecommendationStatus.PENDING
@@ -90,9 +93,11 @@ def test_generates_double_down_recommendation_for_growing_piece(sync_db):
     created = tasks._generate_recommendations_for_tenant(sync_db, tenant.id)
 
     assert created == 1
-    rec = sync_db.query(ContentRecommendation).filter(
-        ContentRecommendation.tenant_id == tenant.id
-    ).one()
+    rec = (
+        sync_db.query(ContentRecommendation)
+        .filter(ContentRecommendation.tenant_id == tenant.id)
+        .one()
+    )
     assert rec.kind == ContentRecommendationKind.DOUBLE_DOWN
 
 
@@ -138,9 +143,11 @@ def test_does_not_duplicate_pending_recommendation_on_repeat_sweep(sync_db):
 
     assert first == 1
     assert second == 0
-    count = sync_db.query(ContentRecommendation).filter(
-        ContentRecommendation.tenant_id == tenant.id
-    ).count()
+    count = (
+        sync_db.query(ContentRecommendation)
+        .filter(ContentRecommendation.tenant_id == tenant.id)
+        .count()
+    )
     assert count == 1
 
 
@@ -151,19 +158,87 @@ def test_generates_new_recommendation_after_prior_one_dismissed(sync_db):
     _seed_events(sync_db, tenant, user, cp, count=5, days_ago=5)
 
     tasks._generate_recommendations_for_tenant(sync_db, tenant.id)
-    rec = sync_db.query(ContentRecommendation).filter(
-        ContentRecommendation.tenant_id == tenant.id
-    ).one()
+    rec = (
+        sync_db.query(ContentRecommendation)
+        .filter(ContentRecommendation.tenant_id == tenant.id)
+        .one()
+    )
     rec.status = ContentRecommendationStatus.DISMISSED
     sync_db.commit()
 
     created = tasks._generate_recommendations_for_tenant(sync_db, tenant.id)
 
     assert created == 1
-    count = sync_db.query(ContentRecommendation).filter(
-        ContentRecommendation.tenant_id == tenant.id
-    ).count()
+    count = (
+        sync_db.query(ContentRecommendation)
+        .filter(ContentRecommendation.tenant_id == tenant.id)
+        .count()
+    )
     assert count == 2
+
+
+def test_generates_new_topic_recommendation_from_tag_gap(sync_db):
+    tenant, user = _seed_tenant_user(sync_db)
+    _seed_published_piece(sync_db, tenant, user, "A", tags=["seo", "onboarding"])
+    _seed_published_piece(sync_db, tenant, user, "B", tags=["seo", "onboarding"])
+    _seed_published_piece(sync_db, tenant, user, "C", tags=["pricing"])
+
+    created = tasks._generate_recommendations_for_tenant(sync_db, tenant.id)
+
+    assert created == 1
+    rec = (
+        sync_db.query(ContentRecommendation)
+        .filter(ContentRecommendation.tenant_id == tenant.id)
+        .one()
+    )
+    assert rec.kind == ContentRecommendationKind.NEW_TOPIC
+    assert rec.content_piece_id is None
+    assert "pricing" in rec.title
+
+
+def test_new_topic_recommendation_not_duplicated_on_repeat_sweep(sync_db):
+    tenant, user = _seed_tenant_user(sync_db)
+    _seed_published_piece(sync_db, tenant, user, "A", tags=["seo", "onboarding"])
+    _seed_published_piece(sync_db, tenant, user, "B", tags=["seo", "onboarding"])
+    _seed_published_piece(sync_db, tenant, user, "C", tags=["pricing"])
+
+    first = tasks._generate_recommendations_for_tenant(sync_db, tenant.id)
+    second = tasks._generate_recommendations_for_tenant(sync_db, tenant.id)
+
+    assert first == 1
+    assert second == 0
+    count = (
+        sync_db.query(ContentRecommendation)
+        .filter(
+            ContentRecommendation.tenant_id == tenant.id,
+            ContentRecommendation.kind == ContentRecommendationKind.NEW_TOPIC,
+        )
+        .count()
+    )
+    assert count == 1
+
+
+def test_multiple_distinct_new_topic_gaps_all_created(sync_db):
+    """Two different gap suggestions (both content_piece_id=None) must not
+    collide in the dedup set the way the DB's own partial unique index
+    correctly allows — regression test for the title-based dedup fix."""
+    tenant, user = _seed_tenant_user(sync_db)
+    _seed_published_piece(sync_db, tenant, user, "A", tags=["seo", "onboarding"])
+    _seed_published_piece(sync_db, tenant, user, "B", tags=["seo", "onboarding"])
+    _seed_published_piece(sync_db, tenant, user, "C", tags=["pricing"])
+    _seed_published_piece(sync_db, tenant, user, "D", tags=["billing"])
+
+    created = tasks._generate_recommendations_for_tenant(sync_db, tenant.id)
+
+    assert created == 2
+    titles = {
+        rec.title
+        for rec in sync_db.query(ContentRecommendation).filter(
+            ContentRecommendation.tenant_id == tenant.id,
+            ContentRecommendation.kind == ContentRecommendationKind.NEW_TOPIC,
+        )
+    }
+    assert len(titles) == 2
 
 
 def test_sweep_is_scoped_per_tenant(sync_db):
