@@ -140,6 +140,18 @@ export type AnalyticsConnectorSyncResult = {
 
 export type AnalyticsWindow = "7" | "30" | "90" | "all";
 
+export type ContentRecommendation = {
+  id: string;
+  kind: "REFRESH" | "DOUBLE_DOWN" | "NEW_TOPIC";
+  content_piece_id: string | null;
+  title: string;
+  rationale: string;
+  score: number;
+  status: "PENDING" | "ACTIONED" | "DISMISSED";
+  orchestrator_run_id: string | null;
+  created_at: string;
+};
+
 export const getAttributionSummary = (window: AnalyticsWindow = "all") =>
   apiGet<AttributionSummary>(`/analytics/summary${analyticsWindowQuery(window)}`);
 
@@ -219,3 +231,16 @@ export const syncAnalyticsConnector = (id: string) =>
 
 export const getGoogleAuthUrl = (provider: "ga4" | "gsc") =>
   apiGet<GoogleAuthUrl>(`/analytics/connectors/google/auth-url?provider=${provider}`);
+
+export const listRecommendations = (status: string = "PENDING") =>
+  apiGet<ContentRecommendation[]>(`/analytics/recommendations?status=${status}`);
+
+export const dismissRecommendation = (id: string) =>
+  apiSend<ContentRecommendation>(`/analytics/recommendations/${id}/dismiss`, "POST", {});
+
+export const startRunFromRecommendation = (id: string) =>
+  apiSend<ContentRecommendation>(
+    `/analytics/recommendations/${id}/start-run`,
+    "POST",
+    {},
+  );
