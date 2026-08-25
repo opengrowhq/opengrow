@@ -4,6 +4,18 @@ import uuid
 
 import pytest
 
+from app.config import settings
+
+# _signup_router (app/routers/auth.py) is bound to a separate, unmounted
+# APIRouter() at import time when DEPLOYMENT_MODE=lite, so /auth/signup is
+# never registered on the running app at all in lite mode — a real 404, not
+# a permission/config error a test-time monkeypatch could work around. CI
+# (.github/workflows/ci.yml) runs DEPLOYMENT_MODE=lite, so these tests need
+# a hosted-mode run to actually exercise; skip rather than fail here.
+requires_hosted_mode = pytest.mark.skipif(
+    settings.is_lite, reason="/auth/signup only exists when DEPLOYMENT_MODE != lite"
+)
+
 
 async def test_login_returns_token_and_me(client, tenant_factory):
     account = await tenant_factory(password="pw-123456")
@@ -85,6 +97,7 @@ def _signup_payload(**overrides):
     return payload
 
 
+@requires_hosted_mode
 async def test_signup_creates_tenant_and_first_user(client, db, stub_authz):
     from sqlalchemy import select
     from app.models.tenant import Tenant
@@ -116,6 +129,7 @@ async def test_signup_creates_tenant_and_first_user(client, db, stub_authz):
     assert user.tenant_id == tenant.id
 
 
+@requires_hosted_mode
 async def test_signup_rejects_duplicate_email(client, stub_authz):
     payload = _signup_payload()
     first = await client.post("/auth/signup", json=payload)
@@ -128,6 +142,7 @@ async def test_signup_rejects_duplicate_email(client, stub_authz):
     assert second.status_code == 409
 
 
+@requires_hosted_mode
 async def test_signup_slugs_collide_safely(client, db, stub_authz):
     """Two different workspaces with the same display name must not collide
     on the tenant slug — the second gets a numeric suffix."""
@@ -154,6 +169,7 @@ async def test_signup_slugs_collide_safely(client, db, stub_authz):
     assert sorted(slugs) == [base, f"{base}-2"]
 
 
+@requires_hosted_mode
 async def test_signup_rejects_short_password(client):
     resp = await client.post(
         "/auth/signup", json=_signup_payload(password="short")
@@ -161,6 +177,7 @@ async def test_signup_rejects_short_password(client):
     assert resp.status_code == 422
 
 
+@requires_hosted_mode
 async def test_signup_grants_admin_and_writer_access(client, monkeypatch):
     """The first user of a new tenant must be able to do admin-gated things
     (e.g. billing) immediately, not just read/write content — same two

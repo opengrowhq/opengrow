@@ -5,8 +5,20 @@ import uuid
 
 import pytest
 
+from app.config import settings
 from app.models.analytics_connector import AnalyticsConnectorStatus
 from app.models.content_recommendation import ContentRecommendation
+
+# _StubAuthZClient.check() (app/core/authz.py) always returns True in
+# DEPLOYMENT_MODE=lite by design ("everything allowed, tenant isolation
+# still enforced in SQL") — there is no real OpenFGA to deny anything
+# against. A test that relies on an *unstubbed* authz_client.check() call
+# denying a permission can never see that denial in lite mode, including
+# in CI (.github/workflows/ci.yml runs DEPLOYMENT_MODE: lite).
+requires_real_authz = pytest.mark.skipif(
+    settings.is_lite,
+    reason="authz_client.check() always allows under DEPLOYMENT_MODE=lite",
+)
 
 
 async def _key_headers(client, tenant_factory):
@@ -351,6 +363,7 @@ async def test_create_generation_requires_brief(client, tenant_factory, allow_wr
     assert call.json()["result"]["isError"] is True
 
 
+@requires_real_authz
 async def test_create_generation_surfaces_403_as_a_soft_tool_error(
     client, tenant_factory
 ):
