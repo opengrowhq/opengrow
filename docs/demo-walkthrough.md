@@ -85,7 +85,7 @@ RUN_ID=$(echo "$RUN" | jq -r .run_id)
 
 With `pause_for_outline_approval: true` the run stops at
 `AWAITING_OUTLINE_APPROVAL`. Review and approve the outline (UI, or
-`POST /orchestrator/runs/$RUN_ID/approve-outline`), and the run continues to a
+`POST /orchestrator/runs/$RUN_ID/outline/approve`), and the run continues to a
 full Markdown draft saved as a content piece.
 
 ## 3. Publish as a GitHub pull request

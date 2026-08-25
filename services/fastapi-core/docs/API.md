@@ -108,17 +108,34 @@ Added for the platform build-out (see `/docs` for shapes):
   on a `ContentPiece` (`POST`/`PATCH /content`) and an hourly sweep publishes
   it automatically once it's `APPROVED` and due, through the same publisher
   adapters as a manual `POST /content/{id}/publish`.
-- **`/analytics/recommendations`** — `GET` lists suggestions (`REFRESH` for
-  decaying content, `DOUBLE_DOWN` for growing content) computed daily from
-  real trend data; `POST .../dismiss` or `POST .../start-run` (turns a
-  suggestion straight into a new orchestrator run).
+- **`/analytics/recommendations`** — `GET` lists suggestions computed daily
+  from real trend data: `REFRESH` for decaying content, `DOUBLE_DOWN` for
+  growing content, `NEW_TOPIC` for a tag that shows up on only one published
+  piece (a topic touched once, never built into a cluster — a weaker,
+  co-occurrence-only signal, always scored below the two trend-backed kinds).
+  `POST .../dismiss` or `POST .../start-run` (turns a suggestion straight
+  into a new orchestrator run; `NEW_TOPIC` suggestions have no
+  `content_piece_id`, since they're tenant-wide gaps, not per-piece).
 - **`/analytics/stripe/credentials`**, **`/analytics/stripe/config`** — BYOK:
   connect your OWN Stripe account (not OpenGrow's billing) so your customers'
   `charge.succeeded` events attribute revenue back to content automatically,
   via `POST /analytics/stripe/webhook/{tenant_id}` (signature-verified against
   your stored webhook secret).
 - **`/mcp`** — MCP JSON-RPC endpoint for AI agents (initialize / tools/list /
-  tools/call); auth via `X-API-Key`.
+  tools/call); auth via `X-API-Key`. Tools mirror the REST surface —
+  content/brands (`list_content`, `create_content`, `transition_content`,
+  `list_brands`), generations (`create_generation`, `get_generation`,
+  `list_generations`), orchestrator runs (`create_orchestrator_run`,
+  `get_orchestrator_run`, `list_orchestrator_runs`), the article pipeline
+  (`create_article_run` — flattens `ArticleBrief`'s fields as top-level tool
+  arguments; `approve_article_outline` — takes `run_id` + an outline section
+  list once a run reports `AWAITING_OUTLINE_APPROVAL`), analytics connectors
+  (`list_analytics_connectors`, `sync_analytics_connector`), recommendations
+  (`list_recommendations`, `dismiss_recommendation`,
+  `start_run_from_recommendation`), publications (`list_publications`), and
+  attribution (`get_attribution_summary`). Write tools call the same
+  REST-router functions the HTTP endpoints use, so authz/credit-gating/
+  business logic isn't re-derived.
 
 Rate limiting (per key/token/IP) is available but off by default; when a hosted
 deployment enables it, expect `429` + `Retry-After`.
