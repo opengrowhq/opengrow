@@ -20,7 +20,7 @@ Self-host free. Bring your own AI. Publish from GitHub today, more channels tomo
 
 ---
 
-## Status: Pre-Alpha (v0.1.0)
+## Status: Pre-Alpha (v0.2.0)
 
 Full dockerized multi-tenant backend + lite personal-use compose. Backend vertical slice and the Next.js tenant app run locally. The REST API is first-class and documented at `services/fastapi-core/docs/API.md` (live schema at `/docs`).
 
@@ -342,14 +342,14 @@ Every new or changed functionality must include focused tests in the same change
 ## License
 
 - **Code**: [GNU Affero General Public License v3](./LICENSE)
-- **Commercial option**: For enterprises whose legal teams cannot accept AGPL — contact `anaxagoras.kosta@gmail.com` or `moysismoyseos251@gmail.com` per [NOTICE](./NOTICE)
+- **Commercial option**: For enterprises whose legal teams cannot accept AGPL — open a [GitHub Discussion](https://github.com/opengrowhq/opengrow/discussions) per [NOTICE](./NOTICE)
 
 ---
 
 <div align="center">
 
-**Star the repo** ⭐ to follow along. **v0.1.0 target: December 2026.**
+**Star the repo** ⭐ to follow along.
 
-[opengrow.dev](https://opengrow.dev) · Built by [@serviceopsnotes](https://x.com/serviceopsnotes)
+[opengrow.dev](https://opengrow.dev) · Built by [@akfullstack](https://x.com/akfullstack)
 
 </div>
