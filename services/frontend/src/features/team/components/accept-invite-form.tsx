@@ -42,7 +42,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
             <span className="text-xl font-black tracking-tight">OpenGrow</span>
           </div>
 
-          <h1 className="text-3xl font-black tracking-tight">You're invited</h1>
+          <h1 className="text-3xl font-black tracking-tight">You&rsquo;re invited</h1>
           <p className="mt-2 text-sm font-medium text-gray-500">
             Set your name and password to join the workspace.
           </p>

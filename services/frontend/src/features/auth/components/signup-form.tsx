@@ -51,7 +51,7 @@ export function SignupForm() {
 
           <h1 className="text-3xl font-black tracking-tight">Create your workspace</h1>
           <p className="mt-2 text-sm font-medium text-gray-500">
-            Free to start — upgrade to Pro or Team whenever you're ready.
+            Free to start — upgrade to Pro or Team whenever you&rsquo;re ready.
           </p>
 
           <div className="mt-8 space-y-4">
