@@ -23,6 +23,9 @@ import {
   importAnalyticsEventsCsv,
   listAnalyticsConnectors,
   syncAnalyticsConnector,
+  listRecommendations,
+  dismissRecommendation,
+  startRunFromRecommendation,
 } from "./api";
 
 const hasToken = () => !!loadToken();
@@ -173,5 +176,29 @@ export function useSyncAnalyticsConnector() {
   return useMutation({
     mutationFn: syncAnalyticsConnector,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["analytics", "connectors"] }),
+  });
+}
+
+export function useRecommendations(status: string = "PENDING") {
+  return useQuery({
+    queryKey: ["analytics", "recommendations", status],
+    queryFn: () => listRecommendations(status),
+    enabled: hasToken(),
+  });
+}
+
+export function useDismissRecommendation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: dismissRecommendation,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["analytics", "recommendations"] }),
+  });
+}
+
+export function useStartRunFromRecommendation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: startRunFromRecommendation,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["analytics", "recommendations"] }),
   });
 }
