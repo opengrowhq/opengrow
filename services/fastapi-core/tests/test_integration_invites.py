@@ -1,7 +1,5 @@
 """Integration tests for team invites (create, list, revoke, accept)."""
 
-import uuid
-
 import pytest
 
 from app.config import settings
