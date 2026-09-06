@@ -24,8 +24,9 @@ Paths are identical in both modes (e.g. `/content`, `/analytics/summary`).
 - Send `Authorization: Bearer <access_token>` on every other call.
 - `GET /auth/me` → `{ id, email, display_name, tenant_id, tenant_slug }`.
 - `401` on missing/invalid/expired token.
-- Self-service signup (`POST /auth/register`) is **hosted-only** — not in the
-  open-source core (returns 404 here).
+- Self-service signup is not part of the open-source core — workspace
+  creation is seed/script-only (`make seed`); registration endpoints
+  return 404 here.
 
 ## Versioning
 
@@ -55,7 +56,7 @@ All errors are JSON with a **string** `detail`:
 Validation errors (`422`) additionally include a structured `errors` array
 (the raw pydantic error list). Common codes: `400` bad input, `401`
 unauthenticated, `403` not permitted, `404` not found / not your tenant,
-`409` illegal state transition, `422` validation, `502` upstream (e.g. Stripe/
+`409` illegal state transition, `422` validation, `502` upstream (e.g.
 GitHub).
 
 ## Async jobs (poll pattern)
@@ -134,8 +135,8 @@ Added for the platform build-out (see `/docs` for shapes):
   (`list_recommendations`, `dismiss_recommendation`,
   `start_run_from_recommendation`), publications (`list_publications`), and
   attribution (`get_attribution_summary`). Write tools call the same
-  REST-router functions the HTTP endpoints use, so authz/credit-gating/
-  business logic isn't re-derived.
+  REST-router functions the HTTP endpoints use, so authz/business logic
+  isn't re-derived.
 
-Rate limiting (per key/token/IP) is available but off by default; when a hosted
+Rate limiting (per key/token/IP) is available but off by default; when a
 deployment enables it, expect `429` + `Retry-After`.

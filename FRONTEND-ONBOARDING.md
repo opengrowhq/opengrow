@@ -9,7 +9,7 @@ Requires Docker Desktop / Docker Engine + Compose v2.
 
 ```bash
 cp .env.lite.example .env      # optional: add OPENAI_API_KEY for real generation
-make lite-up                   # starts the 5-service backend stack
+make lite-up                   # starts the 8-service backend stack
 make lite-migrate && make lite-seed
 ```
 
@@ -91,7 +91,7 @@ Endpoint groups: `/auth`, `/content`, `/brands`, `/generations`, `/assets`,
 
 ## 6. What's out of scope for you
 
-Marketing homepage, pricing, and billing UI are a **hosted-only** overlay (not in
-this repo) — you don't need them. The open-source app boots straight to `/login`.
+Marketing homepage, pricing, and billing UI are **not part of this repo** —
+you don't need them. The open-source app boots straight to `/login`.
 
 Questions → ping the team. Have fun. 🚀

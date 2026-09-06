@@ -33,7 +33,7 @@ Read `FRONTEND-ONBOARDING.md` first. Full API contract: `/docs` + `services/fast
 
 ## Out of scope for v0.1.0 (do NOT build)
 
-- Marketing homepage, pricing, billing/checkout — **hosted-only overlay**, not in this repo.
+- Marketing homepage, pricing, billing/checkout — not part of this repo.
 - API-key management UI, usage dashboard, MCP — backend exists; UI is post-v0.1.0.
 
 ## Done =

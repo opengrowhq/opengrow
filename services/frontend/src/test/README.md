@@ -29,6 +29,5 @@ studio channel presets (`features/studio/presets.test.mjs`).
 - **Browser e2e** (Playwright) is not set up yet — no real backend-driven flow test.
   The component tests mock at the hook boundary. Add Playwright when a seeded lite
   stack is wired into CI.
-- **Pricing checkout funnel** lives in the commercial hosted overlay (a separate,
-  private repo), not here; its pure helpers are unit-tested there. Add component
-  coverage for the toggle/checkout in that overlay using this same Vitest setup.
+- **Pricing/billing UI** is not part of the open-source frontend (billing was
+  removed from core in 0.3.0), so there is no checkout funnel to cover here.

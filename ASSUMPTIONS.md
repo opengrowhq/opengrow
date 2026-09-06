@@ -191,7 +191,7 @@ All variables required to run OpenGrow, exhaustively:
 **Reachable in `.env.example`** (safe to commit, no secrets):
 
 - `INFISICAL_URL`, `INFISICAL_PROJECT_ID`, `INFISICAL_ENVIRONMENT`, `INFISICAL_TOKEN`
-- `OPENGROW_ENV`, `HOSTED_MODE`, `SERVICE_NAME`
+- `OPENGROW_ENV`, `SERVICE_NAME`
 - `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`
 - `REDIS_HOST`, `REDIS_PORT`, `REDIS_BROKER_DB`, `REDIS_RESULT_DB`, `REDIS_CACHE_DB`
 - `QDRANT_HOST`, `QDRANT_PORT`
@@ -221,18 +221,19 @@ All variables required to run OpenGrow, exhaustively:
 1. Rate limiting — the *mechanism* is implemented (Redis fixed-window, per
    API-key/token/IP, `app/core/rate_limit.py` + HTTP middleware) but **off by
    default** (`RATE_LIMIT_ENABLED=false`). Per-plan quota enforcement/billing is
-   a hosted concern, not in the open-source core.
+   not part of the open-source core.
 2. Presigned URL uploads (direct browser → MinIO) — not implemented. Current
    path: browser → node-gateway → FastAPI → MinIO. Fine up to ~25 MiB; larger
    files should switch to presigned PUT.
 3. Frontend — present but pre-alpha. The open-source app is login + tenant app
-   routes under `/app/[slug]/...` (root `/` redirects to `/login`). Marketing +
-   pricing + billing UI are a **hosted overlay** (open-core split), not in the
-   public repo.
+   routes under `/app/[slug]/...` (root `/` redirects to `/login`). Billing
+   (Stripe checkout, credits, seat pricing) shipped in 0.2.0 and was removed
+   again in 0.3.0 — pricing/billing is not part of the open-source core.
 4. WebSocket / SSE — not implemented. Current pattern is client polling. SSE
    for job progress is Week 3-4 work.
-5. Ollama container — not in compose. LiteLLM points at `host.docker.internal`
-   for local Ollama; running Ollama as a compose service is dev-optional.
+5. Ollama container — present in `docker-compose.lite.yml` as the in-stack
+   `ollama` service (lite default; override `OLLAMA_BASE_URL` to point at the
+   host or any other Ollama instance instead).
 6. Prometheus / Grafana — not in compose. See rejections.
 7. Retention / soft-delete sweep — models have `is_deleted` flag; scheduled
    cleanup task not yet implemented.
@@ -256,4 +257,4 @@ All variables required to run OpenGrow, exhaustively:
     LinkedIn adapters, BYOK, SSRF-guarded), an orchestrator run endpoint
     (generate → promote → optional publish), and optional `limit/offset` +
     `X-Total-Count` pagination on list endpoints. Usage *billing* (charging for
-    metered usage) is hosted-only.
+    metered usage) is not part of the open-source core.

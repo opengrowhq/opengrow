@@ -2,7 +2,7 @@
 # OpenGrow — Lite Compose (Personal / Single-tenant)
 # =============================================================================
 # Use this for personal blog/marketing automation on your laptop or a small VPS.
-# 5 services, ~2 GB RAM floor, ~5 min setup.
+# 8 services, ~2 GB RAM floor, ~5 min setup.
 #
 # Skips: OpenFGA (stub allows all), Infisical (env vars), ClamAV (auto-clean),
 # Qdrant (embed generated but not stored), LiteLLM proxy (in-process library),

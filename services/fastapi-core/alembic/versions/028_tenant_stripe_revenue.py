@@ -1,6 +1,5 @@
 """tenant_stripe_credentials + tenant_stripe_webhook_events — a tenant's OWN
-Stripe account (their downstream customers), separate from OpenGrow's own
-billing Stripe account/webhook.
+Stripe account (their downstream customers), used for revenue analytics.
 
 Revision ID: 028_tenant_stripe_revenue
 Revises: 027_content_recommendations

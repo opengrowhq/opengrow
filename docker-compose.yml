@@ -35,7 +35,6 @@ x-infra-env: &infra-env
   MAILPIT_HOST: ${MAILPIT_HOST}
   MAILPIT_SMTP_PORT: ${MAILPIT_SMTP_PORT}
   OPENGROW_ENV: ${OPENGROW_ENV}
-  HOSTED_MODE: ${HOSTED_MODE}
 
 networks:
   opengrow:

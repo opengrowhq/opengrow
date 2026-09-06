@@ -59,7 +59,7 @@ Never commit:
 
 ## Model-provider data flow
 
-OpenGrow sends prompts, selected brand context, and generation inputs to the configured model provider through LiteLLM. Self-hosted operators control the keys and providers they configure. Hosted mode will document managed-provider behavior before production launch.
+OpenGrow sends prompts, selected brand context, and generation inputs to the configured model provider through LiteLLM. Self-hosted operators control the keys and providers they configure.
 
 ## Current known limits
 

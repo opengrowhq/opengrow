@@ -90,8 +90,8 @@ prod-down: ## Prod stop
 prod-logs: ## Prod logs
 	$(COMPOSE_PROD) logs -f --tail=200
 
-# ---- Lite mode (personal / single-tenant, 5 services) ----
-lite-up: ## Start lite stack (personal use, 5 services)
+# ---- Lite mode (personal / single-tenant, 8 services) ----
+lite-up: ## Start lite stack (personal use, 8 services)
 	@[ -f .env ] || (echo "  → seeding .env from .env.lite.example"; cp .env.lite.example .env)
 	$(COMPOSE_LITE) up -d
 	@echo "  → run: make lite-migrate && make lite-seed"

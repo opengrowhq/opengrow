@@ -73,7 +73,6 @@ services/frontend/src/
 │   ├── content/              # content list, editor, lifecycle
 │   ├── publishing/           # channels, GitHub publish, publications
 │   ├── analytics/            # dashboards (later phase)
-│   └── billing/              # plans, checkout, usage (later phase)
 │       └── (each: components/  hooks/  api.ts  store.ts  types.ts  index.ts)
 ├── components/               # cross-feature UI primitives (design system)
 │   └── ui/                   # button, input, dialog, sheet, toast, status-pill…
@@ -243,8 +242,10 @@ render paired current/previous bars. Content, source, and channel cards include
 compact current/previous trend bars.
 Next: dashboard QA and richer executive attribution views.
 
-### 9.8 Billing / Settings (later phase)
-Plans + the bottom-sheet Stripe checkout, usage & rollover credits, one-click cancel; workspace, members, brand, API keys (BYOK), theme.
+### 9.8 Billing / Settings
+Billing shipped in 0.2.0 and was removed again in 0.3.0 — it is not part of
+this repo. Settings (workspace, members, brand, API keys (BYOK), theme)
+remains here; members/roles landed via the invites feature.
 
 ---
 
@@ -295,7 +296,7 @@ paying the cost now.
 | **F2 — Studio** | Format picker → brief → variant review (gallery/swipe) → conversational + inline refine + versions |
 | **F3 — Content + Publish** | Editor polish, in-app GitHub publish UX, publications tracking (builds on scaffold) |
 | **F4 — Analytics** | Performance dashboards → revenue attribution |
-| **F5 — Billing/Team** | Bottom-sheet Stripe checkout, usage/credits, members/roles |
+| **F5 — Billing/Team** | ~~Bottom-sheet Stripe checkout, usage/credits~~ → billing removed from the core in 0.3.0 — not part of this repo. Members/roles shipped via invites. |
 
 > **Staging note (why F0 is trimmed):** TanStack Query is a clear win now — it
 > replaces hand-rolled `fetch` + `useState` + `setTimeout` polling with caching,

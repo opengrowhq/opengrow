@@ -1517,12 +1517,12 @@ async def start_run_from_recommendation(
 
 # -----------------------------------------------------------------------------
 # Tenant-owned Stripe revenue sync: a tenant's OWN Stripe account (their
-# downstream customers paying THEM), completely separate from OpenGrow's own
-# platform-billing Stripe account (app.routers.billing / STRIPE_SECRET_KEY).
-# BYOK, mirrors app.routers.content's GitHub credential connect/disconnect
-# pattern; webhook signature verification mirrors app.routers.billing's
-# stripe_webhook, but scoped per tenant since each tenant has their own
-# webhook secret (no single settings.STRIPE_WEBHOOK_SECRET can verify it).
+# downstream customers paying THEM). OpenGrow's core has no platform billing
+# (removed in 0.3.0 — it lives in the private hosted overlay); this is BYOK
+# per-tenant revenue attribution, mirroring app.routers.content's GitHub
+# credential connect/disconnect pattern. Webhook signature verification is
+# standard Stripe webhook handling, but scoped per tenant since each tenant
+# has their own webhook secret stored on their credential row.
 # -----------------------------------------------------------------------------
 async def _load_tenant_stripe_credential(
     db: AsyncSession, tenant_id: UUID
@@ -1697,9 +1697,8 @@ async def tenant_stripe_webhook(
 ):
     """Unauthenticated by design (Stripe can't send a bearer token) — trust
     comes entirely from the signature check against THIS tenant's stored
-    webhook_secret, mirrored from app.routers.billing.stripe_webhook. The
-    tenant_id in the path only selects which secret to verify against; it
-    grants nothing on its own."""
+    webhook_secret. The tenant_id in the path only selects which secret to
+    verify against; it grants nothing on its own."""
     credential = await _load_tenant_stripe_credential(db, tenant_id)
     if credential is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Stripe not connected")

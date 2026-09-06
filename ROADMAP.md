@@ -10,7 +10,7 @@
 
 ---
 
-## Status: Pre-Alpha (v0.1.0)
+## Status: Pre-Alpha (v0.3.0)
 
 Auth, asset upload, AI generation, the full content lifecycle, GitHub PR publishing, and revenue attribution are in place, with a tenant-scoped Next.js app at `/app/[slug]`. The API is now first-class: API keys for headless access, an MCP server for AI agents, usage metering, optional rate limiting, multi-channel publishing (WordPress/Ghost), and an orchestrator run endpoint. The orchestrator now runs the full content cycle end to end — keyword research, versioned playbooks, a quality gate, scheduled auto-publish, and attribution-driven recommendations that can start the next run themselves. See `services/fastapi-core/docs/API.md`.
 
@@ -25,7 +25,7 @@ We looked closely at the AI content/SEO tool landscape — closed SaaS products 
 1. **GitHub PR-based publishing.** Every tool we found publishes via manual export or a CMS plugin at best. None open a pull request against your own blog repo the way a developer would expect.
 2. **Revenue attribution.** No tool — open or closed source — connects a specific piece of content to the revenue it actually generated. Everyone stops at traffic and rankings.
 
-These are not the entire product. They are the first wedge: a narrow, useful, differentiated workflow for technical founders. Both ship as **core, free, self-hosted features** — never held back for a paid tier. Self-hosting OpenGrow gets you the full product; hosted plans exist purely for convenience (no server to run, managed AI keys, priority support), never for extra functionality.
+These are not the entire product. They are the first wedge: a narrow, useful, differentiated workflow for technical founders. Both ship as **core, free, self-hosted features** — never held back for a paid tier. Self-hosting OpenGrow gets you the full product.
 
 ## Build order
 
@@ -62,7 +62,7 @@ company context → generated content → GitHub PR → published URL → traffi
 - First-class REST API — **shipped** (documented at `docs/API.md`, API keys, pagination)
 - MCP server support, so OpenGrow can be driven directly from Claude Code, Cursor, or any other AI agent — **shipped** (`/mcp`)
 - Per-tenant usage metering + rate-limiting mechanism — **shipped** (off by default)
-- Usage-priced hosted API once real usage exists — pending (billing lives in the hosted tier)
+- Usage-priced API once real usage exists — pending (billing is out of scope for the open-source core; metering ships via the usage ledger)
 
 ## Deliberately delayed
 
@@ -70,12 +70,12 @@ company context → generated content → GitHub PR → published URL → traffi
 - Broad CMS/social integrations before the GitHub-native wedge converts users
 - Treating GitHub PR publishing as the full product instead of the first channel
 - Enterprise SSO before commercial demand exists
-- Kubernetes before single-server hosted operations are proven
+- Kubernetes before single-server production operations are proven
 - Complex SEO crawler before attribution exists
 
 ## Guiding principle
 
-Self-hosted and open source stays genuinely free — full feature set, not a crippled trial. Hosted plans sell convenience and infrastructure, never capability. If a feature is worth having, it's worth having for free.
+Self-hosted and open source stays genuinely free — full feature set, not a crippled trial. If a feature is worth having, it's worth having for free.
 
 ## Open-source growth system
 

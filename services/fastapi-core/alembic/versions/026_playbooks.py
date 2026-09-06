@@ -1,7 +1,7 @@
 """playbooks — versioned prompt/methodology templates
 
 Revision ID: 026_playbooks
-Revises: 025_seat_billing
+Revises: 024_invites
 Create Date: 2026-08-24
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
 revision: str = "026_playbooks"
-down_revision: Union[str, None] = "025_seat_billing"
+down_revision: Union[str, None] = "024_invites"
 branch_labels = None
 depends_on = None
 

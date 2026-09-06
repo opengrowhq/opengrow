@@ -100,8 +100,7 @@ TOOLS: list[dict] = [
         "name": "create_generation",
         "description": (
             "Start a new AI generation from a brief. Runs async — the returned "
-            "generation is QUEUED; poll get_generation for the result. On a "
-            "paid plan this holds credit up front for the estimated cost."
+            "generation is QUEUED; poll get_generation for the result."
         ),
         "inputSchema": {
             "type": "object",
@@ -452,9 +451,9 @@ async def _get_generation(db: AsyncSession, user: User, args: dict) -> dict:
 
 
 async def _create_generation(db: AsyncSession, user: User, args: dict) -> dict:
-    # Reuses the real REST handler (authz, credit hold, task dispatch, usage
-    # metering) rather than re-deriving that logic here — it's billing-
-    # critical and has already had subtle bugs fixed in it twice.
+    # Reuses the real REST handler (authz, task dispatch, usage metering)
+    # rather than re-deriving that logic here — it's state-machine-critical
+    # and has already had subtle bugs fixed in it twice.
     from app.routers.generations import create_generation
     from app.schemas.generation import GenerationCreate
 
@@ -543,7 +542,7 @@ _ARTICLE_BRIEF_FIELDS = (
 async def _create_article_run(db: AsyncSession, user: User, args: dict) -> dict:
     # Same "reuse the real REST handler" precedent as create_generation/
     # create_orchestrator_run — the article pipeline's brief/model/publish
-    # wiring is billing- and state-machine-critical, not worth re-deriving.
+    # wiring is state-machine-critical, not worth re-deriving.
     from pydantic import ValidationError
 
     from app.routers.orchestrator import create_run
@@ -753,8 +752,8 @@ async def handle_jsonrpc(payload: dict, db: AsyncSession, user: User) -> dict | 
         except HTTPException as e:
             # create_generation/create_orchestrator_run reuse the real REST
             # handlers, which raise HTTPException for expected outcomes an
-            # agent needs to handle inline (402 insufficient credits, 403
-            # not permitted, 404 not found) — surface those as a JSON-RPC
+            # agent needs to handle inline (403 not permitted, 404 not
+            # found, 409 conflict) — surface those as a JSON-RPC
             # tool error like ValueError, not an HTTP-transport failure.
             return _result(
                 request_id,
