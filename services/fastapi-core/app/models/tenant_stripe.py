@@ -12,9 +12,8 @@ from app.models.base import IdMixin, TenantMixin, TimestampMixin
 
 class TenantStripeCredential(TenantMixin, Base):
     """A tenant's OWN Stripe account credential (their downstream customers'
-    payments) — separate from OpenGrow's own platform-billing Stripe account
-    (app.models.stripe_webhook_event / STRIPE_SECRET_KEY in settings, which
-    bills the tenant, not the other way around). Mirrors GitHubCredential's
+    payments). OpenGrow's core has no platform billing (removed in 0.3.0);
+    this is per-tenant BYOK revenue attribution. Mirrors GitHubCredential's
     BYOK shape exactly.
     """
 
@@ -33,11 +32,9 @@ class TenantStripeCredential(TenantMixin, Base):
 
 class TenantStripeWebhookEvent(IdMixin, TimestampMixin, Base):
     """Idempotency log for a tenant's own Stripe webhook deliveries. Scoped
-    to (tenant_id, stripe_event_id) rather than a global-unique event ID —
-    unlike app.models.stripe_webhook_event.StripeWebhookEvent, which only
-    ever sees events from OpenGrow's single platform Stripe account, this
-    table sees events from many independent tenant-owned Stripe accounts,
-    so uniqueness must be scoped per tenant.
+    to (tenant_id, stripe_event_id) rather than a global-unique event ID:
+    this table sees events from many independent tenant-owned Stripe
+    accounts, so uniqueness must be scoped per tenant.
     """
 
     __tablename__ = "tenant_stripe_webhook_events"

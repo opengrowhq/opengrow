@@ -1,7 +1,8 @@
 """Redis fixed-window rate limiter (per API-key / token / IP).
 
 Disabled unless settings.RATE_LIMIT_ENABLED; the middleware short-circuits so
-lite/self-host pays nothing. Groundwork for per-tenant quotas on the hosted API.
+lite/self-host pays nothing. Groundwork for per-tenant quotas on a metered
+deployment.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """invites — pending team-member invitations for a tenant
 
 Revision ID: 024_invites
-Revises: 023_credit_balance
+Revises: 021_slack_publication_channel
 Create Date: 2026-08-10
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
 revision: str = "024_invites"
-down_revision: Union[str, None] = "023_credit_balance"
+down_revision: Union[str, None] = "021_slack_publication_channel"
 branch_labels = None
 depends_on = None
 
@@ -61,6 +61,6 @@ def downgrade() -> None:
     op.drop_index("ix_invites_tenant_id", table_name="invites")
     op.drop_table("invites")
     # op.drop_table already drops the enum type as a side effect (mirrors the
-    # auto-create on create_table) — checkfirst guards against the same
-    # double-operation bug documented in 022_billing_subscription.py.
+    # auto-create on create_table) — checkfirst guards against a double-drop
+    # of the enum.
     sa.Enum(name="invite_status").drop(op.get_bind(), checkfirst=True)

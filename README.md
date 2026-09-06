@@ -20,7 +20,7 @@ Self-host free. Bring your own AI. Publish from GitHub today, more channels tomo
 
 ---
 
-## Status: Pre-Alpha (v0.2.0)
+## Status: Pre-Alpha (v0.3.0)
 
 Full dockerized multi-tenant backend + lite personal-use compose. Backend vertical slice and the Next.js tenant app run locally. The REST API is first-class and documented at `services/fastapi-core/docs/API.md` (live schema at `/docs`).
 
@@ -68,7 +68,7 @@ The full loop runs locally today — **context → content → publish → attri
 - First-class headless REST API: API keys (`X-API-Key`), `limit/offset` + `X-Total-Count` pagination, `GET /version` — reference in [`docs/API.md`](./services/fastapi-core/docs/API.md)
 - MCP server (`/mcp`, 19 tools) so agents (Claude Code, Cursor) can drive OpenGrow directly — content, generations, the full article pipeline (research → outline → approve → draft), analytics connectors, and recommendations, all reusing the same REST logic
 - Single-call content cycle (`/orchestrator/runs`), per-tenant usage metering (`/usage`), optional rate limiting
-- Lite (personal, 5 services) and Production (multi-tenant, 15 services) from one codebase
+- Lite (personal, 8 services) and Production (multi-tenant, 15 services) from one codebase
 
 ## Why OpenGrow exists
 
@@ -82,13 +82,13 @@ This loop is not just a diagram — `POST /analytics/recommendations/{id}/start-
 
 The first publishing channel is **GitHub PR-based publishing** because technical founders already trust reviewable pull requests for website and docs changes. The second wedge is **revenue attribution** because the product only becomes valuable when it learns which content created signups, pipeline, or revenue.
 
-GitHub PR publishing is not the whole product. It is the first sharp workflow. Later channels can include static-site adapters, WordPress, Ghost, Webflow, newsletters, social posts, API/webhooks, and hosted integrations. The order is intentional: prove one differentiated workflow first, then broaden distribution without becoming another generic scheduler.
+GitHub PR publishing is not the whole product. It is the first sharp workflow. Later channels can include static-site adapters, WordPress, Ghost, Webflow, newsletters, social posts, API/webhooks, and more. The order is intentional: prove one differentiated workflow first, then broaden distribution without becoming another generic scheduler.
 
 ## Choose your deployment
 
 OpenGrow ships in two shapes from the same codebase — pick by use case:
 
-| | **Lite** (personal / single-tenant) | **Production** (multi-tenant / hosted) |
+| | **Lite** (personal / single-tenant) | **Production** (multi-tenant) |
 |---|---|---|
 | Services | 5 | 15 |
 | Setup time | ~5 min | ~15 min |
@@ -101,7 +101,7 @@ OpenGrow ships in two shapes from the same codebase — pick by use case:
 | BFF | not needed (direct FastAPI) | Node/Fastify |
 | Reverse proxy | not needed | Caddy (auto-TLS in prod) |
 | Multi-tenancy | single-tenant | full row-level + ReBAC |
-| Best for | solo dev, personal blog automation, quick eval | agency, team, enterprise, opengrow.dev-style hosted |
+| Best for | solo dev, personal blog automation, quick eval | agency, team, enterprise |
 
 Both modes use the same `services/fastapi-core/app/` code — the `DEPLOYMENT_MODE` env var branches the boot-time behavior. Read [`ASSUMPTIONS.md`](./ASSUMPTIONS.md) for the architectural rationale.
 
@@ -119,7 +119,7 @@ cd opengrow
 cp .env.lite.example .env
 $EDITOR .env       # set OPENAI_API_KEY (or use Ollama for free local)
 
-# Start the 5-service stack
+# Start the 8-service stack
 make lite-up
 
 # Optional: free local generation + asset retrieval with Ollama
@@ -249,7 +249,7 @@ done
 
 ## Quick Start — Production (15 minutes)
 
-For multi-tenant deployments (opengrow.dev-style hosted, agencies, teams, enterprise).
+For multi-tenant deployments (agencies, teams, enterprise).
 
 ```bash
 # 1. Bootstrap secrets, dep containers, print the checklist
@@ -278,9 +278,8 @@ For a Debian single-server prod deploy: `make prod-up` after setting `CADDY_DOMA
 
 ```
 opengrow/
-├── docker-compose.lite.yml           # Lite (5 services) — personal use
+├── docker-compose.lite.yml           # Lite (8 services) — personal use
 ├── docker-compose.yml                # Base (15 services) — production
-├── docker-compose.override.yml       # Dev overlay for base
 ├── docker-compose.prod.yml           # Debian single-server overlay
 ├── Makefile                          # make lite-up / make up-d / make prod-up
 ├── .env.lite.example                 # Env template for lite
@@ -333,7 +332,7 @@ Tenant isolation via row-level `tenant_id` filters is enforced in **both** modes
 | [docs/backup-restore.md](./docs/backup-restore.md) | Backup/restore for operators — Postgres, MinIO object storage, lite vs production |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Local setup, contribution rules, PR checklist |
 | [SECURITY.md](./SECURITY.md) | Security posture, reporting, lite vs production trust boundary |
-| [COMMERCIAL.md](./COMMERCIAL.md) | Hosted convenience, commercial license, support path |
+| [COMMERCIAL.md](./COMMERCIAL.md) | Commercial license, support path |
 
 ## Testing rule
 

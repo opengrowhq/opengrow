@@ -40,7 +40,11 @@ from app.models.analytics_connector import (
     AnalyticsConnectorStatus,
 )
 from app.core.audit import record_audit_event
-from app.core.credential_crypto import CredentialCryptoError, decrypt_secret, encrypt_secret
+from app.core.credential_crypto import (
+    CredentialCryptoError,
+    decrypt_secret,
+    encrypt_secret,
+)
 from app.models.content_piece import ContentPiece
 from app.models.content_recommendation import (
     ContentRecommendation,
@@ -112,6 +116,7 @@ def _csv_row_to_import_row(raw: dict[str, str | None]) -> AnalyticsImportRow:
     if occurred_at:
         cleaned["occurred_at"] = occurred_at
     return AnalyticsImportRow.model_validate(cleaned)
+
 
 PIXEL_GIF = (
     b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
@@ -1422,9 +1427,8 @@ async def list_recommendations(
     if status_filter:
         try:
             stmt = stmt.where(
-                ContentRecommendation.status == ContentRecommendationStatus(
-                    status_filter.upper()
-                )
+                ContentRecommendation.status
+                == ContentRecommendationStatus(status_filter.upper())
             )
         except ValueError:
             raise HTTPException(
@@ -1517,12 +1521,11 @@ async def start_run_from_recommendation(
 
 # -----------------------------------------------------------------------------
 # Tenant-owned Stripe revenue sync: a tenant's OWN Stripe account (their
-# downstream customers paying THEM), completely separate from OpenGrow's own
-# platform-billing Stripe account (app.routers.billing / STRIPE_SECRET_KEY).
-# BYOK, mirrors app.routers.content's GitHub credential connect/disconnect
-# pattern; webhook signature verification mirrors app.routers.billing's
-# stripe_webhook, but scoped per tenant since each tenant has their own
-# webhook secret (no single settings.STRIPE_WEBHOOK_SECRET can verify it).
+# downstream customers paying THEM). The core has no platform billing; this
+# is BYOK per-tenant revenue attribution, mirroring app.routers.content's
+# GitHub credential connect/disconnect pattern. Webhook signature verification is
+# standard Stripe webhook handling, but scoped per tenant since each tenant
+# has their own webhook secret stored on their credential row.
 # -----------------------------------------------------------------------------
 async def _load_tenant_stripe_credential(
     db: AsyncSession, tenant_id: UUID
@@ -1697,9 +1700,8 @@ async def tenant_stripe_webhook(
 ):
     """Unauthenticated by design (Stripe can't send a bearer token) — trust
     comes entirely from the signature check against THIS tenant's stored
-    webhook_secret, mirrored from app.routers.billing.stripe_webhook. The
-    tenant_id in the path only selects which secret to verify against; it
-    grants nothing on its own."""
+    webhook_secret. The tenant_id in the path only selects which secret to
+    verify against; it grants nothing on its own."""
     credential = await _load_tenant_stripe_credential(db, tenant_id)
     if credential is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Stripe not connected")

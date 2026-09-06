@@ -17,7 +17,7 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -27,7 +27,6 @@ from app.database import get_db
 from app.models.invite import Invite, InviteStatus, generate_invite_token
 from app.models.tenant import Tenant
 from app.models.user import User
-from app.routers.billing import sync_seat_quantity
 from app.schemas.auth import TokenPair
 from app.schemas.invite import InviteAcceptRequest, InviteCreate, InviteOut, MemberOut
 
@@ -211,9 +210,7 @@ async def remove_member(
     if target is None or not target.is_active:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Member not found")
 
-    if await authz_client.check(
-        str(target.id), "admin", f"tenant:{current.tenant_id}"
-    ):
+    if await authz_client.check(str(target.id), "admin", f"tenant:{current.tenant_id}"):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "Can't remove an admin — transfer admin to another member first",
@@ -221,13 +218,6 @@ async def remove_member(
 
     target.is_active = False
     await db.commit()
-
-    member_count = await db.scalar(
-        select(func.count(User.id)).where(
-            User.tenant_id == current.tenant_id, User.is_active.is_(True)
-        )
-    )
-    await sync_seat_quantity(db, current.tenant_id, member_count or 0)
 
 
 @router.post("/{token}/accept", response_model=TokenPair)
@@ -271,18 +261,11 @@ async def accept_invite(
     )
     # Every member (not just admins) needs the base "member" relation for
     # read/write access — an "admin" invite grants admin ON TOP of that,
-    # not instead of it (mirrors app.routers.auth.signup granting both).
+    # not instead of it (same admin+member pair scripts/seed.py grants).
     if invite.role == "admin":
         await authz_client.write_membership(
             str(user.id), str(invite.tenant_id), role="member"
         )
-
-    member_count = await db.scalar(
-        select(func.count(User.id)).where(
-            User.tenant_id == invite.tenant_id, User.is_active.is_(True)
-        )
-    )
-    await sync_seat_quantity(db, invite.tenant_id, member_count or 0)
 
     return TokenPair(
         access_token=issue_access(str(user.id), str(invite.tenant_id)),

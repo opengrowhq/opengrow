@@ -1,7 +1,5 @@
 """Integration tests for team invites (create, list, revoke, accept)."""
 
-import uuid
-
 import pytest
 
 from app.config import settings
@@ -124,7 +122,9 @@ async def test_list_invites_returns_tenant_invites(
     assert emails == {"a@example.com", "b@example.com"}
 
 
-async def test_list_invites_is_tenant_scoped(client, tenant_factory, allow_admin, no_smtp):
+async def test_list_invites_is_tenant_scoped(
+    client, tenant_factory, allow_admin, no_smtp
+):
     a = await tenant_factory()
     b = await tenant_factory()
     await client.post("/invites", json={"email": "x@example.com"}, headers=a["headers"])
@@ -148,7 +148,9 @@ async def test_revoke_invite(client, tenant_factory, allow_admin, no_smtp):
     assert listed.json()[0]["status"] == "REVOKED"
 
 
-async def test_revoke_already_revoked_invite_409(client, tenant_factory, allow_admin, no_smtp):
+async def test_revoke_already_revoked_invite_409(
+    client, tenant_factory, allow_admin, no_smtp
+):
     acct = await tenant_factory()
     created = await client.post(
         "/invites", json={"email": "new@example.com"}, headers=acct["headers"]
@@ -215,7 +217,9 @@ async def test_accept_invite_rejects_unknown_token(client):
     assert resp.status_code == 404
 
 
-async def test_accept_invite_rejects_reuse(client, tenant_factory, allow_admin, no_smtp, db):
+async def test_accept_invite_rejects_reuse(
+    client, tenant_factory, allow_admin, no_smtp, db
+):
     from sqlalchemy import select
     from app.models.invite import Invite
 
@@ -240,7 +244,9 @@ async def test_accept_invite_rejects_reuse(client, tenant_factory, allow_admin, 
     assert second.status_code == 409
 
 
-async def test_accept_invite_rejects_expired(client, tenant_factory, allow_admin, no_smtp, db):
+async def test_accept_invite_rejects_expired(
+    client, tenant_factory, allow_admin, no_smtp, db
+):
     from datetime import datetime, timedelta, timezone
     from sqlalchemy import select
     from app.models.invite import Invite

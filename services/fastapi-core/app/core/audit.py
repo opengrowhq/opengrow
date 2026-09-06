@@ -1,8 +1,7 @@
 """Security audit trail — append-only, same-transaction writes.
 
 record_audit_event() is called explicitly at each security-relevant call
-site (see docs/audit-logging-design.md in opengrow-internal for the full
-list and rationale). It never catches its own exceptions: a failure here
+site. It never catches its own exceptions: a failure here
 must roll back whatever action it was recording, so the audit trail never
 has a silent gap for an action that "succeeded."
 """

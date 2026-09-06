@@ -54,7 +54,7 @@ Avoid first contributions that touch tenant isolation, auth, production secrets,
 
 ## Development rules
 
-- Keep self-hosted functionality complete. Hosted plans sell convenience, not withheld features.
+- Keep self-hosted functionality complete — the full feature set ships in the open-source core, never withheld.
 - Never commit `.env`, `infra/secrets/*`, `backups/*`, API keys, passwords, or real customer data.
 - All model calls must go through `services/fastapi-core/app/core/litellm_client.py`.
 - Every tenant-owned table must include `tenant_id`.

@@ -15,7 +15,7 @@ Read in this order:
 ## Project overview
 
 OpenGrow is an open-source (AGPL v3) multi-tenant AI content-generation SaaS.
-Self-host free, paid hosted tier on `opengrow.dev`.
+Self-host free.
 
 - **License**: AGPL v3 (community) + commercial option per NOTICE
 - **Domain**: opengrow.dev (owned)
@@ -25,10 +25,10 @@ Self-host free, paid hosted tier on `opengrow.dev`.
 
 The same `services/fastapi-core/app/` code runs in either mode. `DEPLOYMENT_MODE` env var switches the boot-time wiring:
 
-- **`DEPLOYMENT_MODE=lite`** (personal use, 5 services) — env-var secrets, stub OpenFGA (`check → True`), ClamAV skipped, LiteLLM as Python library, no Qdrant persistence, direct FastAPI (no BFF). Compose: `docker-compose.lite.yml`. See `Makefile`: `lite-up`, `lite-migrate`, `lite-seed`.
-- **`DEPLOYMENT_MODE=production`** (multi-tenant / hosted, 15 services) — Infisical secrets, real OpenFGA, ClamAV enforced, LiteLLM proxy container, Qdrant, node-gateway BFF, Caddy. Compose: `docker-compose.yml` (+ dev / prod overlays).
+- **`DEPLOYMENT_MODE=lite`** (personal use, 8 services) — env-var secrets, stub OpenFGA (`check → True`), ClamAV skipped, LiteLLM as Python library, no Qdrant persistence, direct FastAPI (no BFF). Compose: `docker-compose.lite.yml`. See `Makefile`: `lite-up`, `lite-migrate`, `lite-seed`.
+- **`DEPLOYMENT_MODE=production`** (multi-tenant, 15 services) — Infisical secrets, real OpenFGA, ClamAV enforced, LiteLLM proxy container, Qdrant, node-gateway BFF, Caddy. Compose: `docker-compose.yml` (+ dev / prod overlays).
 
-Every core module that has a lite path documents both branches. When adding a new capability, decide explicitly: is this personal-use-safe (implement lite path or graceful skip), or hosted-only (guard with `if not settings.is_lite: ...`)?
+Every core module that has a lite path documents both branches. When adding a new capability, decide explicitly: is this personal-use-safe (implement lite path or graceful skip), or production-mode-only (guard with `if not settings.is_lite: ...`)?
 
 Full rationale in `ASSUMPTIONS.md`.
 
@@ -36,8 +36,8 @@ Full rationale in `ASSUMPTIONS.md`.
 
 | Layer | Choice | Notes |
 |---|---|---|
-| BFF | Node.js 22 + Fastify + TypeScript | Stateless JWT verifier + HTTP proxy |
-| Core | Python 3.12 + FastAPI + SQLAlchemy 2 async + Alembic | All business logic + DB |
+| BFF | Node.js 26 + Fastify + TypeScript | Stateless JWT verifier + HTTP proxy |
+| Core | Python 3.13 + FastAPI + SQLAlchemy 2 async + Alembic | All business logic + DB |
 | Queue | Celery 5 + Redis 7 + Flower | Two queues: `cpu_light`, `gen_heavy` |
 | DB | PostgreSQL 16 | Multi-tenant via row-level `tenant_id` |
 | Vector | Qdrant 1.11 | One collection per resource type |
@@ -46,7 +46,7 @@ Full rationale in `ASSUMPTIONS.md`.
 | Secrets | Infisical | Never in git/compose/Dockerfiles |
 | LLM gateway | LiteLLM | ALL model calls route through here — never import `openai`/`anthropic` directly |
 | AV | ClamAV (clamd network socket) | Scan every upload before persist |
-| Local mail | Mailpit | Dev only; prod uses SMTP-relay via LiteLLM/SendGrid |
+| Local mail | Mailpit | Dev + lite only; production compose ships no mail service yet |
 | Reverse proxy | Caddy v2 | Auto-TLS in prod |
 | Orchestration | docker compose | Base + dev overlay + prod overlay |
 
@@ -96,14 +96,15 @@ upload → MinIO temp bucket → scan_asset (Celery) → ClamAV
   tracker, no archived/deprecated status. Prefer a maintained library over an
   abandoned one even if the abandoned one fits slightly better.
 - **Base images**: track the latest stable minor of the pinned major
-  (Python 3.12.x, Node 22.x, Postgres 16.x, Redis 7.x, …) and rebuild so
+  (Python 3.13.x, Node 26.x, Postgres 16.x, Redis 7.x, …) and rebuild so
   security patches land; bump the major deliberately, not by drift.
 - Dependabot (grouped) + CI `audit` steps are the enforcement mechanism — keep
   them green; do not merge past a red security job.
 
 ### Money
-- Not applicable in the scaffold (no billing yet). When billing lands:
-  amounts as integer cents, currency EUR by default.
+- Not part of the open-source core: billing shipped in 0.2.0 and was removed
+  in 0.3.0. The core stays billing-unaware — never add payment processing
+  here; meter billable actions with the usage ledger only.
 
 ### Events / audit
 - Not implemented in scaffold. On next round: publish domain events via a Redis pub/sub
@@ -111,9 +112,9 @@ upload → MinIO temp bucket → scan_asset (Celery) → ClamAV
 
 ## Key commands
 
-**Lite (5 services)**:
+**Lite (8 services)**:
 ```bash
-make lite-up       # Start lite stack (postgres, redis, minio, fastapi-core, celery-worker, mailpit)
+make lite-up       # Start lite stack (postgres, redis, minio, fastapi-core, celery-worker, mailpit, frontend, ollama)
 make lite-migrate  # Alembic migrations
 make lite-seed     # Demo tenant + user
 make lite-down     # Stop (keep data)
@@ -170,7 +171,7 @@ services/node-gateway/src/
 - List endpoints: use `Depends(pagination)` + `paginate()` (`app/core/pagination.py`)
   to add optional `limit/offset` + `X-Total-Count` without changing the array response.
 - Meter billable actions with `record_usage()` (`app/core/usage.py`); the ledger
-  is open-source, but usage *billing/quota enforcement* is a hosted concern only.
+  is open-source, but usage *billing/quota enforcement* is not part of the core.
 - Publishing channels go through the adapter registry (`app/core/publishers/`);
   each adapter is plain httpx + BYOK, mirroring `github_publisher.py`.
 

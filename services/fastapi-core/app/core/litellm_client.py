@@ -67,8 +67,8 @@ async def chat_completion(
     temperature: float = 0.7,
 ) -> tuple[str, dict]:
     """Returns (content, raw_response). The raw response (real token usage +
-    model) is needed by callers that settle real-cost billing via
-    litellm.completion_cost() — see app.core.credits."""
+    model) lets callers meter real cost via litellm.completion_cost() if
+    they need it."""
     if settings.LITELLM_MODE == "library":
         _library_env()
         from litellm import acompletion

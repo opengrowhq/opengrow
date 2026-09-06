@@ -6,12 +6,48 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] — Billing removed from core
+
+The billing features that shipped in 0.2.0 (Stripe Checkout/Billing
+Portal, prepaid credit balance with hold/settle/refund on generations, and
+seat-based Team pricing) have been removed from the open-source core. The
+core is billing-unaware again — generations and orchestrator runs queue
+unconditionally and are metered via the usage ledger only.
+
+### Removed
+
+- `/billing/*` endpoints (checkout, portal, top-up, status, webhook) and the
+  frontend Billing settings card.
+- Credit gating: `debit_credits`/`InsufficientCredits` on
+  `POST /generations`, and the hold/settle/refund credit accounting in
+  `run_generation` and the orchestrator pipelines.
+- Billing columns on `tenants` (`stripe_customer_id`, `billing_plan`,
+  `credit_balance_cents`) and the `subscriptions` /
+  `stripe_webhook_events` tables.
+- `STRIPE_*` and `TEAM_INCLUDED_SEATS` settings/env vars (tenant-owned
+  Stripe *revenue analytics* under `/analytics/stripe/*` is unchanged — it
+  is BYOK per-tenant attribution, not platform billing).
+- Self-service signup `POST /auth/signup` — a Production-mode concern that
+  shipped alongside in-core billing; removed with it. Workspace creation in
+  the core is seed/script-only again (`make seed`).
+
+### Migrations
+
+- Alembic revisions `022_billing_subscription`, `023_credit_balance`, and
+  `025_seat_billing` are gone; the chain is now
+  ...→ `021_slack_publication_channel` → `024_invites` → `026_playbooks` →
+  `027_content_recommendations` → `028_tenant_stripe_revenue`.
+- Existing dev databases that already applied the removed revisions should
+  be reset (`make lite-down && make lite-up`, or drop/recreate the DB), or
+  stamped to the new head with `alembic stamp 028_tenant_stripe_revenue` after reconciling
+  manually.
+
 ## [0.2.0] — Orchestrator, billing, and the attribution feedback loop
 
 Everything since `v0.1.0`: a self-driving content orchestrator (research →
 outline → approve → draft → quality gate → publish → recommend → repeat),
-usage-based hosted billing, and MCP coverage across the whole surface —
-19 tools, up from the base `/mcp` server.
+usage-based billing (removed in 0.3.0), and MCP coverage across the whole
+surface — 19 tools, up from the base `/mcp` server.
 
 ### Added
 
@@ -57,14 +93,16 @@ usage-based hosted billing, and MCP coverage across the whole surface —
   Dismiss / Start-run actions, alongside the existing rule-based "Next
   moves" nudges.
 - Tenant-owned Stripe revenue sync (`/analytics/stripe/*`): connect your own
-  Stripe account (BYOK, separate from OpenGrow's own platform billing) so
-  `charge.succeeded` events attribute revenue back to content automatically.
+  Stripe account (BYOK — your own keys, used only to read `charge.succeeded`
+  events) so revenue attributes back to content automatically.
 
-**Hosted billing** (Production mode; free/self-hosted tiers unaffected)
-- Self-service tenant signup (`POST /auth/signup`) — no more requiring
-  `make seed` to create the first workspace.
+**Team**
 - Team-member invites (backend + frontend): admin-only invite by email,
   token-based no-auth accept flow, tenant member roster and removal.
+
+**Billing** (Production mode — all of the below removed in 0.3.0)
+- Self-service tenant signup (`POST /auth/signup`) — no more requiring
+  `make seed` to create the first workspace.
 - Stripe-hosted Checkout + Billing Portal for Pro/Team plans, with
   signature-verified, idempotent subscription webhooks.
 - Prepaid credit balance with a hard stop on exhausted credit (never a
@@ -148,6 +186,7 @@ attribution** — runs locally, in both Lite (personal) and Production
   Infisical secrets, Caddy auto-TLS, ClamAV, LiteLLM proxy, Qdrant) from the same
   `services/fastapi-core/app/` code, switched by `DEPLOYMENT_MODE`.
 
-[Unreleased]: https://github.com/opengrowhq/opengrow/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/opengrowhq/opengrow/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/opengrowhq/opengrow/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/opengrowhq/opengrow/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/opengrowhq/opengrow/releases/tag/v0.1.0

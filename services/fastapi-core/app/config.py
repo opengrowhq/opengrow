@@ -11,7 +11,6 @@ class Settings(BaseSettings):
     # ---- Runtime identity ----
     SERVICE_NAME: str = "fastapi-core"
     OPENGROW_ENV: str = "dev"
-    HOSTED_MODE: bool = False
 
     # ---- CORS ----
     # Comma-separated browser origins allowed to call the API directly (lite
@@ -21,7 +20,7 @@ class Settings(BaseSettings):
 
     # ---- Deployment mode ----
     # "production" — full 15-service stack (Infisical, OpenFGA, ClamAV, LiteLLM proxy, etc)
-    # "lite"       — 5-service personal-use stack (env-var secrets, stub authz, no ClamAV, in-process LiteLLM)
+    # "lite"       — 8-service personal-use stack (env-var secrets, stub authz, no ClamAV, in-process LiteLLM)
     DEPLOYMENT_MODE: Literal["production", "lite"] = "production"
 
     # "proxy"   — LiteLLM runs as separate container; we call it via HTTP
@@ -73,7 +72,8 @@ class Settings(BaseSettings):
     JWT_REFRESH_DAYS: int = 30
 
     # ---- Rate limiting (per-tenant/token, Redis fixed-window) ----
-    # Off by default so lite/self-host is unthrottled; hosted enables it.
+    # Off by default so lite/self-host is unthrottled; enable for
+    # internet-facing multi-tenant deployments.
     RATE_LIMIT_ENABLED: bool = False
     RATE_LIMIT_PER_MINUTE: int = 120
 
@@ -103,18 +103,9 @@ class Settings(BaseSettings):
     GOOGLE_OAUTH_CLIENT_SECRET: str = ""
     GOOGLE_OAUTH_REDIRECT_URI: str = ""
 
-    # ---- Stripe billing (hosted only — Pro/Team paid tiers, managed LLM key) ----
-    STRIPE_SECRET_KEY: str = ""
-    STRIPE_PUBLISHABLE_KEY: str = ""
-    STRIPE_WEBHOOK_SECRET: str = ""
-    STRIPE_PRICE_ID_PRO: str = ""
-    STRIPE_PRICE_ID_TEAM: str = ""
-    # Team plan is base + per-seat: STRIPE_PRICE_ID_TEAM covers the first
-    # TEAM_INCLUDED_SEATS members; this price bills each seat beyond that,
-    # as a second line item on the same subscription (not a separate one).
-    STRIPE_PRICE_ID_TEAM_SEAT: str = ""
-    TEAM_INCLUDED_SEATS: int = 5
-    # Base URL the browser is served from — Checkout/Billing Portal redirect here.
+    # ---- Frontend ----
+    # Base URL the browser is served from — used for invite accept links in
+    # notification emails.
     FRONTEND_BASE_URL: str = "http://localhost:3000"
 
     # ---- Orchestrator article-pipeline quality gate ----
