@@ -8,8 +8,8 @@
 > inside the existing architecture and invariants (`AGENTS.md`, `ASSUMPTIONS.md`).
 >
 > Scope note: this doc is the **technical build spec**. Product/pricing/tier
-> decisions (what's free vs hosted-only) are intentionally out of scope here and
-> tracked separately by the maintainers.
+> decisions are intentionally out of scope here and tracked separately by the
+> maintainers.
 
 ---
 
@@ -298,7 +298,7 @@ added, use the closest lower-level test coverage.
 - **Cost blast radius** — one unbounded "generate video" button can burn real
   money fast. Concurrency cap + pre-flight usage check are non-negotiable before P5.
 - **Content moderation** — generated ads/faces need a provider moderation pass +
-  an acceptable-use policy before any public/hosted exposure.
+  an acceptable-use policy before any public exposure.
 - **Provider churn** — video/image models get sunset regularly; the
   `media_client` abstraction is what protects us from that.
 

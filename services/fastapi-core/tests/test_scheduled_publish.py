@@ -39,7 +39,9 @@ def _seed_content_piece(
 ):
     metadata = {}
     if due_at is not None:
-        metadata["due_at"] = due_at.isoformat() if hasattr(due_at, "isoformat") else due_at
+        metadata["due_at"] = (
+            due_at.isoformat() if hasattr(due_at, "isoformat") else due_at
+        )
     if scheduled_publish is not None:
         metadata["scheduled_publish"] = scheduled_publish
     cp = ContentPiece(
@@ -106,9 +108,7 @@ def test_publish_due_content_dispatches_only_eligible_pieces(sync_db, monkeypatc
     assert dispatched == [str(eligible.id)]
 
 
-def test_publish_scheduled_content_piece_generic_channel_success(
-    sync_db, monkeypatch
-):
+def test_publish_scheduled_content_piece_generic_channel_success(sync_db, monkeypatch):
     tenant, user = _seed_tenant_user(sync_db)
     cp = _seed_content_piece(
         sync_db,

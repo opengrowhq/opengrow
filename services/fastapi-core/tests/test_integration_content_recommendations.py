@@ -17,7 +17,7 @@ async def _seed_recommendation(
         tenant_id=tenant.id,
         kind=kind,
         content_piece_id=content_piece_id,
-        title="Refresh \"Old post\"",
+        title='Refresh "Old post"',
         rationale="traffic dropped 80%",
         score=0.8,
     )

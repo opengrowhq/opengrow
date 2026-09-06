@@ -92,7 +92,9 @@ async def test_connect_rejects_blank_secret_key(client, tenant_factory):
     assert resp.status_code == 422  # min_length=1 on secret_key
 
 
-async def test_config_reflects_connected_credential(client, tenant_factory, monkeypatch):
+async def test_config_reflects_connected_credential(
+    client, tenant_factory, monkeypatch
+):
     _patch_valid_key(monkeypatch)
     acct = await tenant_factory()
     await client.post(
@@ -360,5 +362,9 @@ async def test_webhook_events_are_scoped_per_tenant(
         assert resp.status_code == 200
 
     row = await db.execute(select(RevenueEvent))
-    events = [e for e in row.scalars().all() if e.tenant_id in (a["tenant"].id, b["tenant"].id)]
+    events = [
+        e
+        for e in row.scalars().all()
+        if e.tenant_id in (a["tenant"].id, b["tenant"].id)
+    ]
     assert len(events) == 2

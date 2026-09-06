@@ -6,9 +6,9 @@ reviewable PR process your team already trusts. This is a **bring-your-own-key
 (BYOK)** workflow: you provide a GitHub token, OpenGrow uses it to write the file
 and open the PR.
 
-> Self-hosting sets one token for the whole instance (you own it). The hosted
-> tier connects each workspace to its own GitHub separately — see
-> [Hosted](#hosted-opengrowdev) below.
+> Self-hosting sets one token for the whole instance (you own it).
+> Multi-tenant deployments can instead let each workspace connect its own
+> GitHub separately — see §"Per-tenant token" below.
 
 ## 1. Pick (or create) a target repo
 
@@ -78,7 +78,7 @@ curl -s localhost:8000/content/publish/github/config \
 #    "source": "env", "has_tenant_credential": false, "token_last4": null}
 ```
 
-**Per-tenant token (multi-tenant / hosted):** instead of one instance-wide
+**Per-tenant token (multi-tenant deployments):** instead of one instance-wide
 `GITHUB_TOKEN`, each tenant can store its own PAT — encrypted at rest, never
 returned by the API:
 
@@ -131,10 +131,3 @@ The same flow is available headlessly: `POST /content/{id}/publish/github`
 | `403` / "Resource not accessible" | Token lacks **Contents** or **Pull requests: write**, or the repo isn't in the token's selected repositories. |
 | `404` on the repo | Wrong `owner/repo`, or the token's resource owner can't see it. On an **org-owned private repo** with a fine-grained token, see the warning in §2 — owner must be the org, repo selected, org-owner approval granted. |
 | "Approve before publishing" | Move the piece to **Approved** first. |
-
-## Hosted (opengrow.dev)
-
-On the hosted tier you don't manage a server-wide token. Each workspace connects
-its **own** GitHub, so PRs are opened under your account against your repos —
-no shared token. Per-tenant BYOK tokens are live (see the credentials API
-above); a one-click "Connect GitHub" App install comes next.

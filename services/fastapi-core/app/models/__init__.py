@@ -23,8 +23,6 @@ from app.models.publication import (  # noqa: F401
     PublicationChannel,
     PublicationStatus,
 )
-from app.models.stripe_webhook_event import StripeWebhookEvent  # noqa: F401
-from app.models.subscription import Subscription, SubscriptionStatus  # noqa: F401
 from app.models.tenant import Tenant  # noqa: F401
 from app.models.tenant_stripe import (  # noqa: F401
     TenantStripeCredential,

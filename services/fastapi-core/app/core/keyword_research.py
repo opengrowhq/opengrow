@@ -25,7 +25,9 @@ from app.core.outbound_http import fetch_url
 
 log = logging.getLogger(__name__)
 
-AUTOCOMPLETE_URL = "https://suggestqueries.google.com/complete/search?client=firefox&q={q}"
+AUTOCOMPLETE_URL = (
+    "https://suggestqueries.google.com/complete/search?client=firefox&q={q}"
+)
 BING_SEARCH_URL = "https://www.bing.com/search?q={q}"
 MAX_SUGGESTIONS = 10
 MAX_PAA_QUESTIONS = 8

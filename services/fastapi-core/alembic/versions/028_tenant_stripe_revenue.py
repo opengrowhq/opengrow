@@ -1,6 +1,5 @@
 """tenant_stripe_credentials + tenant_stripe_webhook_events — a tenant's OWN
-Stripe account (their downstream customers), separate from OpenGrow's own
-billing Stripe account/webhook.
+Stripe account (their downstream customers), used for revenue analytics.
 
 Revision ID: 028_tenant_stripe_revenue
 Revises: 027_content_recommendations
@@ -73,9 +72,7 @@ def upgrade() -> None:
         sa.Column("stripe_event_id", sa.String(255), nullable=False),
         sa.Column("event_type", sa.String(100), nullable=False),
         sa.Column("payload", JSONB, nullable=False),
-        sa.Column(
-            "processed_at", sa.DateTime(timezone=True), nullable=False
-        ),
+        sa.Column("processed_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

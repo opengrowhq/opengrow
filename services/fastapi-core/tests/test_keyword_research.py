@@ -71,7 +71,10 @@ def test_research_keywords_falls_back_to_topic_when_autocomplete_empty():
 
 def test_research_keywords_survives_autocomplete_failure():
     with patch("app.core.keyword_research.fetch_url") as mock_fetch:
-        mock_fetch.side_effect = [Exception("network down"), _bing_html(["a title"], [])]
+        mock_fetch.side_effect = [
+            Exception("network down"),
+            _bing_html(["a title"], []),
+        ]
         result = research_keywords("compounding")
 
     assert result["primary_keyword"] == "compounding"  # falls back to topic

@@ -72,7 +72,9 @@ def test_dedupe_key_differs_for_different_charges():
 
 
 def test_occurred_at_derived_from_charge_created():
-    ev = _stripe_charge_to_revenue_event(TENANT_ID, OWNER_ID, _charge(created=1_700_000_000))
+    ev = _stripe_charge_to_revenue_event(
+        TENANT_ID, OWNER_ID, _charge(created=1_700_000_000)
+    )
     assert ev.occurred_at.timestamp() == 1_700_000_000
 
 

@@ -104,13 +104,23 @@ def test_score_draft_low_quality_scores_low():
 
 def test_feedback_for_retry_flags_weak_dimensions():
     feedback = feedback_for_retry(
-        {"keyword_coverage": 0.0, "heading_coverage": 1.0, "length": 1.0, "readability": 1.0}
+        {
+            "keyword_coverage": 0.0,
+            "heading_coverage": 1.0,
+            "length": 1.0,
+            "readability": 1.0,
+        }
     )
     assert "keyword" in feedback.lower()
 
 
 def test_feedback_for_retry_empty_when_all_strong():
     feedback = feedback_for_retry(
-        {"keyword_coverage": 1.0, "heading_coverage": 1.0, "length": 1.0, "readability": 1.0}
+        {
+            "keyword_coverage": 1.0,
+            "heading_coverage": 1.0,
+            "length": 1.0,
+            "readability": 1.0,
+        }
     )
     assert feedback == ""
