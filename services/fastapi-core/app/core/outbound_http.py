@@ -19,7 +19,7 @@ import httpx
 MAX_BYTES = 2_000_000  # 2 MB
 MAX_REDIRECTS = 3
 TIMEOUT_S = 15
-USER_AGENT = "OpenGrowBot/0.1 (+https://opengrow.dev)"
+USER_AGENT = "OpenGrowBot/0.3 (+https://opengrow.dev)"
 
 
 class UnsafeURLError(Exception):

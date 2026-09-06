@@ -54,10 +54,11 @@ async def test_register_is_not_in_public_core(client):
 
 
 async def test_signup_is_not_in_public_core(client):
-    # Self-service signup lives in the hosted overlay (POST /auth/register),
-    # gated by ALLOW_SELF_SERVICE_SIGNUP there. The core shipped a /auth/
-    # signup alongside in-core billing (0.2.0); both were removed in 0.3.0 —
-    # this guards against the unguarded core endpoint shadowing the overlay's.
+    # Self-service signup is not part of the open-source core (it shipped
+    # alongside in-core billing in 0.2.0 and was removed in 0.3.0) — an
+    # unguarded core endpoint could shadow a guard in a deployment that
+    # layers its own registration on top. Workspace creation is seed/script-
+    # only here.
     resp = await client.post(
         "/auth/signup",
         json={

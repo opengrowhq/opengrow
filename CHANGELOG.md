@@ -39,7 +39,7 @@ unconditionally and are metered via the usage ledger only.
   `027_content_recommendations` → `028_tenant_stripe_revenue`.
 - Existing dev databases that already applied the removed revisions should
   be reset (`make lite-down && make lite-up`, or drop/recreate the DB), or
-  stamped to the new head with `alembic stamp 028` after reconciling
+  stamped to the new head with `alembic stamp 028_tenant_stripe_revenue` after reconciling
   manually.
 
 ## [0.2.0] — Orchestrator, billing, and the attribution feedback loop
@@ -96,11 +96,13 @@ surface — 19 tools, up from the base `/mcp` server.
   Stripe account (BYOK — your own keys, used only to read `charge.succeeded`
   events) so revenue attributes back to content automatically.
 
+**Team**
+- Team-member invites (backend + frontend): admin-only invite by email,
+  token-based no-auth accept flow, tenant member roster and removal.
+
 **Billing** (Production mode — all of the below removed in 0.3.0)
 - Self-service tenant signup (`POST /auth/signup`) — no more requiring
   `make seed` to create the first workspace.
-- Team-member invites (backend + frontend): admin-only invite by email,
-  token-based no-auth accept flow, tenant member roster and removal.
 - Stripe-hosted Checkout + Billing Portal for Pro/Team plans, with
   signature-verified, idempotent subscription webhooks.
 - Prepaid credit balance with a hard stop on exhausted credit (never a

@@ -2,7 +2,6 @@
 # OpenGrow — Base Compose (shared by dev + prod)
 # =============================================================================
 # Override with:
-#   docker-compose.override.yml  (dev — auto-loaded)
 #   docker-compose.prod.yml      (prod — explicit: -f docker-compose.yml -f docker-compose.prod.yml)
 # =============================================================================
 
