@@ -1,6 +1,6 @@
 "use client";
 
-// Canonical shared motion primitives for the whole app (core + hosted overlay).
+// Canonical shared motion primitives for the whole app.
 // Every primitive degrades gracefully under prefers-reduced-motion (renders the
 // final, visible state with no animation) and animates transform/opacity only so
 // it stays on the compositor at 60fps.

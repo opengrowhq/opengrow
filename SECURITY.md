@@ -65,6 +65,6 @@ OpenGrow sends prompts, selected brand context, and generation inputs to the con
 
 - Refresh token revocation is not yet implemented.
 - Rate limiting exists (`app/core/rate_limit.py`, Redis fixed-window) but is off by default (`RATE_LIMIT_ENABLED=false`) — enable it for any internet-facing deployment.
-- Audit logging covers login (success/failure), API key create/revoke, GitHub credential connect/disconnect, and content publish, via `GET /audit`. Coverage does not yet include tenant-settings or role/team-management actions — those features don't exist yet either.
+- Audit logging covers login (success/failure), API key create/revoke, GitHub credential connect/disconnect, and content publish, via `GET /audit`. Team management (invites, member roster/removal) exists but is not yet audit-covered; tenant-settings changes are not audit-covered either.
 - SOC 2 / ISO controls are not yet in place.
 - Lite mode is not a production security profile.

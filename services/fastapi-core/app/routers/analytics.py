@@ -1521,10 +1521,9 @@ async def start_run_from_recommendation(
 
 # -----------------------------------------------------------------------------
 # Tenant-owned Stripe revenue sync: a tenant's OWN Stripe account (their
-# downstream customers paying THEM). OpenGrow's core has no platform billing
-# (removed in 0.3.0 — it lives in the private hosted overlay); this is BYOK
-# per-tenant revenue attribution, mirroring app.routers.content's GitHub
-# credential connect/disconnect pattern. Webhook signature verification is
+# downstream customers paying THEM). The core has no platform billing; this
+# is BYOK per-tenant revenue attribution, mirroring app.routers.content's
+# GitHub credential connect/disconnect pattern. Webhook signature verification is
 # standard Stripe webhook handling, but scoped per tenant since each tenant
 # has their own webhook secret stored on their credential row.
 # -----------------------------------------------------------------------------

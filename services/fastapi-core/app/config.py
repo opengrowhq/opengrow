@@ -72,7 +72,8 @@ class Settings(BaseSettings):
     JWT_REFRESH_DAYS: int = 30
 
     # ---- Rate limiting (per-tenant/token, Redis fixed-window) ----
-    # Off by default so lite/self-host is unthrottled; hosted enables it.
+    # Off by default so lite/self-host is unthrottled; enable for
+    # internet-facing multi-tenant deployments.
     RATE_LIMIT_ENABLED: bool = False
     RATE_LIMIT_PER_MINUTE: int = 120
 
