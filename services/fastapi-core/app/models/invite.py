@@ -31,7 +31,9 @@ class Invite(TenantMixin, Base):
 
     email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="member")
-    token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    token: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
     status: Mapped[InviteStatus] = mapped_column(
         SAEnum(InviteStatus, name="invite_status"),
         nullable=False,
@@ -43,4 +45,6 @@ class Invite(TenantMixin, Base):
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )

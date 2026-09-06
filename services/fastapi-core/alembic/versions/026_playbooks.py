@@ -63,9 +63,7 @@ def upgrade() -> None:
         WHERE is_active = true AND is_deleted = false
         """
     )
-    op.create_index(
-        "ix_playbooks_tenant_kind", "playbooks", ["tenant_id", "kind"]
-    )
+    op.create_index("ix_playbooks_tenant_kind", "playbooks", ["tenant_id", "kind"])
 
 
 def downgrade() -> None:

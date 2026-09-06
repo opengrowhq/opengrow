@@ -378,9 +378,7 @@ def _fake_article_llm(monkeypatch, fail_on_kind=None, draft_text=_GOOD_DRAFT):
             return "## Intro\n- hook\n\n## Body\n- point"
         outline = (gen.metadata_json or {}).get("outline") or []
         if outline:
-            body = "\n\n".join(
-                f"## {s['heading']}\n{draft_text}" for s in outline
-            )
+            body = "\n\n".join(f"## {s['heading']}\n{draft_text}" for s in outline)
             return body
         return draft_text
 
@@ -567,12 +565,16 @@ def test_execute_run_score_gate_retries_then_promotes(sync_db, monkeypatch):
 
     cp = sync_db.get(ContentPiece, run.content_piece_id)
     assert cp.body == _GOOD_DRAFT
-    assert cp.source_generation_id == gens[2].id  # the passing attempt, not the failed one
+    assert (
+        cp.source_generation_id == gens[2].id
+    )  # the passing attempt, not the failed one
 
 
 def test_execute_run_score_gate_fails_after_max_retries(sync_db, monkeypatch):
     monkeypatch.setattr(
-        orchestrator, "_generate_article", lambda db, gen, model: (
+        orchestrator,
+        "_generate_article",
+        lambda db, gen, model: (
             "## Intro\n- hook\n\n## Body\n- point"
             if (gen.metadata_json or {}).get("kind") == "article_outline"
             else "bad"
@@ -586,7 +588,9 @@ def test_execute_run_score_gate_fails_after_max_retries(sync_db, monkeypatch):
     sync_db.refresh(run)
     assert run.status == OrchestratorRunStatus.FAILED
     assert "scored" in run.error_message
-    assert run.details["score_retries"] == orchestrator.settings.ARTICLE_SCORE_MAX_RETRIES
+    assert (
+        run.details["score_retries"] == orchestrator.settings.ARTICLE_SCORE_MAX_RETRIES
+    )
     # outline + one draft attempt per retry budget slot (initial + retries)
     assert (
         len(_generations(sync_db, run))
@@ -751,4 +755,6 @@ def test_execute_run_keyword_research_failure_falls_back_to_topic(sync_db, monke
     assert orchestrator.execute_run(sync_db, run.id) == "ok"
 
     sync_db.refresh(run)
-    assert run.details["article"]["primary_keyword"] == "Compounding"  # falls back to topic
+    assert (
+        run.details["article"]["primary_keyword"] == "Compounding"
+    )  # falls back to topic

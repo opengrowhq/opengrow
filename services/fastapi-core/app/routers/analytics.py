@@ -40,7 +40,11 @@ from app.models.analytics_connector import (
     AnalyticsConnectorStatus,
 )
 from app.core.audit import record_audit_event
-from app.core.credential_crypto import CredentialCryptoError, decrypt_secret, encrypt_secret
+from app.core.credential_crypto import (
+    CredentialCryptoError,
+    decrypt_secret,
+    encrypt_secret,
+)
 from app.models.content_piece import ContentPiece
 from app.models.content_recommendation import (
     ContentRecommendation,
@@ -112,6 +116,7 @@ def _csv_row_to_import_row(raw: dict[str, str | None]) -> AnalyticsImportRow:
     if occurred_at:
         cleaned["occurred_at"] = occurred_at
     return AnalyticsImportRow.model_validate(cleaned)
+
 
 PIXEL_GIF = (
     b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
@@ -1422,9 +1427,8 @@ async def list_recommendations(
     if status_filter:
         try:
             stmt = stmt.where(
-                ContentRecommendation.status == ContentRecommendationStatus(
-                    status_filter.upper()
-                )
+                ContentRecommendation.status
+                == ContentRecommendationStatus(status_filter.upper())
             )
         except ValueError:
             raise HTTPException(

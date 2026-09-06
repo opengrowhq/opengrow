@@ -101,9 +101,7 @@ async def test_playbooks_are_tenant_isolated(client, tenant_factory):
         json={"kind": "GENERIC_COPY", "name": "x", "system_template": "y"},
         headers=a["headers"],
     )
-    resp = await client.get(
-        f"/playbooks/{created.json()['id']}", headers=b["headers"]
-    )
+    resp = await client.get(f"/playbooks/{created.json()['id']}", headers=b["headers"])
     assert resp.status_code == 404
 
 

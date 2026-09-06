@@ -19,7 +19,9 @@ async def test_csv_import_creates_events(client, tenant_factory):
     assert resp.status_code == 200
     body = resp.json()
     assert body["imported_rows"] == 2
-    assert body["imported_events"] >= 3  # visits+signups+revenue from row 1, visits from row 2
+    assert (
+        body["imported_events"] >= 3
+    )  # visits+signups+revenue from row 1, visits from row 2
 
     summary = await client.get("/analytics/summary", headers=h)
     assert summary.status_code == 200

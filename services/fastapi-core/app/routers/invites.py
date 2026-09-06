@@ -210,9 +210,7 @@ async def remove_member(
     if target is None or not target.is_active:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Member not found")
 
-    if await authz_client.check(
-        str(target.id), "admin", f"tenant:{current.tenant_id}"
-    ):
+    if await authz_client.check(str(target.id), "admin", f"tenant:{current.tenant_id}"):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "Can't remove an admin — transfer admin to another member first",
