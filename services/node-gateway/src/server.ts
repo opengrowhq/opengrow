@@ -5,17 +5,9 @@ import proxy from '@fastify/http-proxy';
 import { loadConfig } from './config.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { makeAuthMiddleware } from './middleware/auth.js';
-import { isPublicPath, pathnameOf } from './public-paths.js';
+import { isPublicPath, pathnameOf, PROXIED_PREFIXES } from './public-paths.js';
 
 // API namespaces proxied 1:1 to fastapi-core (same paths the frontend/lite use).
-const PROXIED_PREFIXES = [
-  '/auth',
-  '/assets',
-  '/generations',
-  '/content',
-  '/brands',
-  '/analytics',
-];
 
 async function main(): Promise<void> {
   const cfg = await loadConfig();

@@ -116,9 +116,9 @@ reuses) a PR. After you merge it, hit **Refresh status** on the publication (or
 Import the sample outcome and revenue events, then read the attribution rollups:
 
 ```bash
-curl -sf -X POST $GW/analytics/import \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  --data-binary @examples/analytics-events.csv     # or the documented JSON import shape
+curl -sf -X POST "$GW/analytics/import/csv?provider=manual" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@examples/analytics-events.csv"   # multipart CSV import (JSON-only: POST /analytics/import)
 
 curl -sf -H "Authorization: Bearer $TOKEN" "$GW/analytics/summary"
 curl -sf -H "Authorization: Bearer $TOKEN" "$GW/analytics/content?days=30"

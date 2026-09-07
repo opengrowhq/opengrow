@@ -107,8 +107,14 @@ upload → MinIO temp bucket → scan_asset (Celery) → ClamAV
   here; meter billable actions with the usage ledger only.
 
 ### Events / audit
-- Not implemented in scaffold. On next round: publish domain events via a Redis pub/sub
-  bus after every DB mutation; audit rows in a shared `audit_log` table.
+- Audit trail shipped: `record_audit_event()` (`app/core/audit.py`) writes
+  append-only rows to the shared `audit_log` table in the SAME transaction as
+  the action being recorded — a failure rolls the action back, so the trail
+  never has a silent gap for a "successful" mutation.
+- Query via `GET /audit` (`app/routers/audit.py`, tenant-scoped,
+  `Depends(get_current_user)`). Migration: `alembic/versions/020_audit_log.py`.
+- Domain events over a Redis pub/sub bus after every DB mutation are still not
+  implemented.
 
 ## Key commands
 
