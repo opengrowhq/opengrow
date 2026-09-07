@@ -44,12 +44,24 @@ A commercial license is for:
 
 It is not a paywall for core self-hosted functionality.
 
-## Support tiers under consideration
+## Hosted plans
 
-- Community: GitHub issues and discussions, no SLA.
-- Hosted Starter: managed workspace for founders.
-- Hosted Team: team workspace, managed backups, priority support.
-- Agency: multiple client workspaces.
-- Enterprise: commercial license, private deployment guidance, security review, support SLA.
+Hosted OpenGrow will be offered in two plans:
+
+| | Starter | Scale |
+|---|---|---|
+| Price (monthly) | $16/mo | $39/mo |
+| Price (6-month) | $72 ($12/mo) | $174 ($29/mo) |
+| Creatives per month | 200 | 650 |
+| Concurrent generations | 2 | 6 |
+| Models & features | Selected | All |
+| Priority support | — | ✓ |
+
+These limits apply to the hosted service only — they pay for managed
+capacity. Self-hosted OpenGrow has none of them: the full product,
+unlimited, free.
+
+Team / seat-based pricing is on the roadmap. Payments are processed by
+our merchant of record, which handles global VAT and sales tax.
 
 For commercial licensing, open a [GitHub Discussion](https://github.com/opengrowhq/opengrow/discussions).
