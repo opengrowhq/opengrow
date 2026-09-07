@@ -68,7 +68,7 @@ The full loop runs locally today — **context → content → publish → attri
 - First-class headless REST API: API keys (`X-API-Key`), `limit/offset` + `X-Total-Count` pagination, `GET /version` — reference in [`docs/API.md`](./services/fastapi-core/docs/API.md)
 - MCP server (`/mcp`, 19 tools) so agents (Claude Code, Cursor) can drive OpenGrow directly — content, generations, the full article pipeline (research → outline → approve → draft), analytics connectors, and recommendations, all reusing the same REST logic
 - Single-call content cycle (`/orchestrator/runs`), per-tenant usage metering (`/usage`), optional rate limiting
-- Lite (personal, 8 services) and Production (multi-tenant, 15 services) from one codebase
+- Lite (personal, 8 services) and Production (multi-tenant, 16 services) from one codebase
 
 ## Why OpenGrow exists
 
@@ -90,7 +90,7 @@ OpenGrow ships in two shapes from the same codebase — pick by use case:
 
 | | **Lite** (personal / single-tenant) | **Production** (multi-tenant) |
 |---|---|---|
-| Services | 8 | 15 |
+| Services | 8 | 16 |
 | Setup time | ~5 min | ~15 min |
 | Min RAM | ~2 GB | ~8 GB |
 | Auth | JWT | JWT + OpenFGA ReBAC |
@@ -279,7 +279,7 @@ For a Debian single-server prod deploy: `make prod-up` after setting `CADDY_DOMA
 ```
 opengrow/
 ├── docker-compose.lite.yml           # Lite (8 services) — personal use
-├── docker-compose.yml                # Base (15 services) — production
+├── docker-compose.yml                # Base (16 services) — production
 ├── docker-compose.prod.yml           # Debian single-server overlay
 ├── Makefile                          # make lite-up / make up-d / make prod-up
 ├── .env.lite.example                 # Env template for lite

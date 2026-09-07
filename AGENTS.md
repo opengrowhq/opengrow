@@ -26,7 +26,7 @@ Self-host free.
 The same `services/fastapi-core/app/` code runs in either mode. `DEPLOYMENT_MODE` env var switches the boot-time wiring:
 
 - **`DEPLOYMENT_MODE=lite`** (personal use, 8 services) — env-var secrets, stub OpenFGA (`check → True`), ClamAV skipped, LiteLLM as Python library, no Qdrant persistence, direct FastAPI (no BFF). Compose: `docker-compose.lite.yml`. See `Makefile`: `lite-up`, `lite-migrate`, `lite-seed`.
-- **`DEPLOYMENT_MODE=production`** (multi-tenant, 15 services) — Infisical secrets, real OpenFGA, ClamAV enforced, LiteLLM proxy container, Qdrant, node-gateway BFF, Caddy. Compose: `docker-compose.yml` (+ dev / prod overlays).
+- **`DEPLOYMENT_MODE=production`** (multi-tenant, 16 services) — Infisical secrets, real OpenFGA, ClamAV enforced, LiteLLM proxy container, Qdrant, node-gateway BFF, Caddy. Compose: `docker-compose.yml` (+ dev / prod overlays).
 
 Every core module that has a lite path documents both branches. When adding a new capability, decide explicitly: is this personal-use-safe (implement lite path or graceful skip), or production-mode-only (guard with `if not settings.is_lite: ...`)?
 
@@ -127,7 +127,7 @@ make lite-down     # Stop (keep data)
 make lite-shell    # Bash into fastapi-core
 ```
 
-**Production (15 services)**:
+**Production (16 services)**:
 ```bash
 make bootstrap    # One-time: generate secret files, seed dev Infisical, bring up deps
 make up-d         # Start full dev stack (background)

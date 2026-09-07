@@ -7,12 +7,17 @@
 {$CADDY_DOMAIN} {
 	encode gzip zstd
 
-	# API traffic to node-gateway (BFF)
+	# API traffic to node-gateway (BFF). The gateway proxies bare namespaces
+	# 1:1 to fastapi-core (/auth, /assets, /content, …), so the /api prefix is
+	# stripped here; /auth/* already matches the gateway's bare paths.
 	@api path /auth/* /api/*
-	reverse_proxy @api node-gateway:3001
+	handle @api {
+		uri strip_prefix /api
+		reverse_proxy node-gateway:3001
+	}
 
-	# Everything else (marketing site, docs) — placeholder while frontend not built
-	respond / "OpenGrow — coming soon" 200
+	# Everything else — Next.js frontend
+	reverse_proxy frontend:3000
 
 	log {
 		output stdout
