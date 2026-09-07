@@ -51,7 +51,7 @@ company context → generated content → GitHub PR → published URL → traffi
 - **Content calendar scheduling — shipped.** Set a due date + publish target on a piece and it publishes itself once approved and due, through the same channel adapters as a manual publish.
 
 ### Later: broaden channels
-- WordPress, Ghost, Webflow adapters — **shipped** (via `POST /content/{id}/publish`); Hugo and plain HTML adapters next
+- WordPress, Ghost, Webflow, Slack adapters — **shipped** (via `POST /content/{id}/publish`); Hugo and plain HTML adapters next
 - Social auto-post for X and LinkedIn — **shipped** (BYOK OAuth token)
 - Email delivery — **shipped** (SMTP)
 - API/webhook publishing for custom workflows
@@ -89,7 +89,7 @@ Every meaningful feature should produce:
 6. Build-in-public post
 7. Follow-up issue for contributors
 
-The internal maintainer operating plan tracks the launch calendar, marketing cadence, and private pricing experiments. Public contributors can use this section as the contribution and release standard.
+The sections above are the public contribution and release standard.
 
 ## Timeline
 

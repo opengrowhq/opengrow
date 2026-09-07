@@ -1,8 +1,8 @@
 # OpenGrow Frontend — Architecture, UX & Onboarding
 
-> **Status**: Living design/foundation doc. The scaffold (`services/frontend`,
-> Next.js App Router + TS + Tailwind) exists with marketing, pricing, login, and
-> a tenant app shell. This defines the target architecture and the migration path
+> **Status**: Living design/foundation doc. The app (`services/frontend`,
+> Next.js App Router + TS + Tailwind) exists with login and a tenant app shell.
+> This defines the target architecture and the migration path
 > so every later phase slots into a stable core.
 > **Audience**: contributors building the frontend. This doc is scoped to the
 > open-source app's UI architecture.

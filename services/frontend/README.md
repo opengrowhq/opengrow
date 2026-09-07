@@ -38,8 +38,8 @@ npm run dev                       # http://localhost:3000
 
 ## What the scaffold does
 
-- **`/`** — Holo-inspired OpenGrow marketing homepage.
-- **`/pricing`** — plan selection, checkout modal, and post-purchase upsell funnel.
+- **`/`** — redirects to `/login` (the open-source app has no marketing or
+  pricing pages; those are hosted-only surfaces).
 - **`/login`** — form login (form-encoded to `POST /auth/login`).
 - **`/app/[slug]`** — tenant pages/slugs dashboard.
 - **`/app/[slug]/brand`** — Brand DNA management.
@@ -111,7 +111,8 @@ into Overdue, Today, Tomorrow, and Later columns.
 
 ## Conventions
 
-- API client: `src/lib/api.ts` (typed, single source of endpoint calls).
+- API client: `src/lib/http.ts` (typed fetch helpers) plus a per-feature
+  `api.ts` in each `src/features/<area>/` (single source of endpoint calls).
 - Auth token: `src/lib/auth.ts` (localStorage for now; moves to an httpOnly
   cookie via the BFF in a later phase).
 - Tenant app links: `src/lib/app-routes.mjs`; do not hardcode top-level

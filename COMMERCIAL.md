@@ -61,7 +61,10 @@ These limits apply to the hosted service only — they pay for managed
 capacity. Self-hosted OpenGrow has none of them: the full product,
 unlimited, free.
 
-Team / seat-based pricing is on the roadmap. Payments are processed by
+Team collaboration is included for free: invite members to your workspace and
+work together on brands, content, and publishing — no per-seat charge in
+either the self-hosted or the hosted product. (Seat-based billing shipped in
+0.2.0 and was removed in 0.3.0; it is not offered.) Payments are processed by
 our merchant of record, which handles global VAT and sales tax.
 
 For commercial licensing, open a [GitHub Discussion](https://github.com/opengrowhq/opengrow/discussions).
