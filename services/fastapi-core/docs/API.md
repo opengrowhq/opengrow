@@ -21,6 +21,10 @@ Paths are identical in both modes (e.g. `/content`, `/analytics/summary`).
 
 - `POST /auth/login` — OAuth2 password form (`username`, `password`, form-encoded)
   → `{ access_token, refresh_token, token_type: "bearer" }`.
+- `POST /auth/refresh` — JSON `{ refresh_token }` → a new token pair. The
+  refresh token is **rotated**: the old refresh token should be discarded in
+  favor of the new one. `401` on invalid/expired refresh tokens, on access
+  tokens presented in their place, or when the user no longer exists/is active.
 - Send `Authorization: Bearer <access_token>` on every other call.
 - `GET /auth/me` → `{ id, email, display_name, tenant_id, tenant_slug }`.
 - `401` on missing/invalid/expired token.
@@ -80,7 +84,7 @@ Added for the platform build-out (see `/docs` for shapes):
 - **`/usage`**, **`/usage/summary`** — per-tenant metering (units + cost by kind).
 - **Publishing** — `GET /content/publish/channels` (channels + `implemented`
   flag), `POST /content/{id}/publish` `{channel, config}` for WordPress, Ghost,
-  Webflow, Email, X, and LinkedIn (BYOK creds in `config`); GitHub keeps its own
+  Webflow, Email, X, LinkedIn, and Slack (BYOK creds in `config`); GitHub keeps its own
   `POST /content/{id}/publish/github`. Config hosts are SSRF-guarded; a missing/
   bad config → `502`.
 - **GitHub publishing credentials** — `GET /content/publish/github/config`

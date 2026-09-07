@@ -7,5 +7,5 @@ This version has breaking changes — APIs, conventions, and file structure may 
 ## Frontend testing
 
 - Every new or changed UI functionality must ship with focused tests for the behavior or flow being changed.
-- Prefer route/component/e2e coverage for user flows such as auth redirects, pricing checkout, and tenant dashboard actions.
+- Prefer route/component/e2e coverage for user flows such as auth redirects and tenant dashboard actions. Checkout flows are not applicable — billing is hosted-only and not part of the open-source app.
 - Manual screenshots and lint/build checks are useful validation, but do not replace automated tests unless no suitable harness exists yet; document that gap clearly.

@@ -43,8 +43,8 @@ sweet spot is >10k-tenant deployments with dedicated platform teams; for a
 of Authzed's more opinionated bootstrap. OpenFGA's schema-first model file
 (`infra/openfga/model.fga`) also composes cleanly with a Postgres migration
 review flow, which matches this repo's Alembic-driven review pattern. If we
-outgrow OpenFGA (unlikely before Month 24 per `docs/BUILD-PLAN.md`), the
-Zanzibar semantics port to SpiceDB in a bounded, well-documented migration.
+outgrow OpenFGA, the Zanzibar semantics port to SpiceDB in a bounded,
+well-documented migration.
 
 ### Secrets — chose **Infisical** over HashiCorp Vault
 
@@ -98,7 +98,7 @@ independently by changing `deploy.replicas`.
 ### Multi-arch images
 
 All base images verified multi-arch on Docker Hub / Quay / GHCR:
-`python:3.12-slim-bookworm`, `node:22-slim`, `postgres:16-alpine`,
+`python:3.13-slim-bookworm`, `node:26-slim`, `postgres:16-alpine`,
 `redis:7-alpine`, `qdrant/qdrant:v1.11.3`, `minio/minio:RELEASE.2024-10-29T16-01-48Z`,
 `clamav/clamav:1.4`, `openfga/openfga:v1.6.2`, `infisical/infisical:v0.90.1-postgres`,
 `ghcr.io/berriai/litellm:main-v1.51.3-stable`, `caddy:2.8-alpine`,
@@ -154,9 +154,9 @@ documented in `infra/scripts/backup.sh`.
 | Blob storage in Postgres | ✅ | Bloats DB, breaks streaming, complicates backups. MinIO is the target. |
 | Direct OpenAI/Anthropic SDK imports | ✅ | Enforced by absence from `requirements.txt`. All calls via LiteLLM. |
 | Synchronous LLM generation on request thread | ✅ | Would tie up a uvicorn worker for minutes; every LLM request goes to `gen_heavy` queue. |
-| Frontend | ⚠️ | A Next.js frontend now exists for marketing, pricing, login, and the first tenant app shell. Deeper app flows and browser-level e2e coverage are still pre-alpha. |
+| Frontend | ⚠️ | A Next.js frontend now exists for login and the tenant app shell. Deeper app flows and browser-level e2e coverage are still pre-alpha. |
 | Kubernetes manifests | ✅ | Prod is a single Debian server. K8s is a Month-12+ concern; not in scope. |
-| Prometheus + Grafana | ⚠️ | Deferred — Flower covers Celery observability, `/ready` covers liveness. Monitoring is Week 20 work. |
+| Prometheus + Grafana | ⚠️ | Deferred — Flower covers Celery observability, `/ready` covers liveness. Revisit when the production deployment outgrows single-node observability. |
 | RLS on Postgres | ✅ | See row above — two isolation layers already in place. |
 | Node-side database schema | ✅ | BFF is stateless; no Node migrations needed today. |
 
@@ -229,8 +229,8 @@ All variables required to run OpenGrow, exhaustively:
    routes under `/app/[slug]/...` (root `/` redirects to `/login`). Billing
    (Stripe checkout, credits, seat pricing) shipped in 0.2.0 and was removed
    again in 0.3.0 — pricing/billing is not part of the open-source core.
-4. WebSocket / SSE — not implemented. Current pattern is client polling. SSE
-   for job progress is Week 3-4 work.
+4. WebSocket / SSE — not implemented. Current pattern is client polling; SSE
+   for job progress is a candidate future addition.
 5. Ollama container — present in `docker-compose.lite.yml` as the in-stack
    `ollama` service (lite default; override `OLLAMA_BASE_URL` to point at the
    host or any other Ollama instance instead).

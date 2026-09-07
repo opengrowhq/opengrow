@@ -90,7 +90,7 @@ OpenGrow ships in two shapes from the same codebase — pick by use case:
 
 | | **Lite** (personal / single-tenant) | **Production** (multi-tenant) |
 |---|---|---|
-| Services | 5 | 15 |
+| Services | 8 | 15 |
 | Setup time | ~5 min | ~15 min |
 | Min RAM | ~2 GB | ~8 GB |
 | Auth | JWT | JWT + OpenFGA ReBAC |
@@ -289,9 +289,9 @@ opengrow/
 ├── LICENSE                           # AGPL v3
 ├── NOTICE                            # Commercial license option
 ├── services/
-│   ├── fastapi-core/                 # Python 3.12 + FastAPI + Celery
+│   ├── fastapi-core/                 # Python 3.13 + FastAPI + Celery
 │   ├── frontend/                     # Next.js App Router frontend
-│   └── node-gateway/                 # Node 22 + Fastify (production only)
+│   └── node-gateway/                 # Node 26 + Fastify (production only)
 ├── infra/
 │   ├── caddy/
 │   ├── litellm/

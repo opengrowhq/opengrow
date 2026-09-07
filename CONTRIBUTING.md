@@ -26,7 +26,7 @@ Then open:
 Log in with:
 
 - Email: `demo@opengrow.dev`
-- Password: `demo-password-change-me`
+- Password: `123456`
 
 Run the current backend vertical slice:
 
