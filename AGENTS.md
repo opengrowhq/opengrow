@@ -192,7 +192,7 @@ Branch strategy — `main` / `dev` / `feature/*`:
 
 ```
 feature/*    ← daily work, short-lived, one focused change
-    ↓ PR (self-merge, 0 approvals needed)
+    ↓ PR (self-merge allowed for maintainers in the bypass list — see below)
 dev          ← integration branch, less strict protection
     ↓ PR (when stable batch ready for release)
 main         ← tagged releases only, strict protection, no force pushes
@@ -205,6 +205,10 @@ main         ← tagged releases only, strict protection, no force pushes
 - Commits: conventional (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`)
 - Never commit `.env`, `infra/secrets/*`, `backups/*` (all in `.gitignore`)
 - Never push without explicit user request
+- **Branch protection requires 1 approving review on both `dev` and `main`.**
+  Maintainer accounts listed in the branch-protection bypass allowances can self-merge
+  their own PRs via the bypass (`gh pr merge --admin`); everyone else needs one approval.
+  CI is not a required check — watch it yourself and do not merge past a red security job.
 
 **Typical feature flow**:
 ```bash
@@ -213,7 +217,7 @@ git checkout -b feature/frontend-scaffold
 # ...work + commit...
 git push -u origin feature/frontend-scaffold
 # open PR on GitHub: base=dev, compare=feature/frontend-scaffold
-# self-merge (0 approvals required on dev)
+# maintainer self-merge via bypass, or 1 approval from a collaborator
 ```
 
 **Release flow**:
