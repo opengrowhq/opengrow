@@ -21,8 +21,10 @@ and `node --test` only picks up `*.test.mjs`, so the two never overlap.
 
 ## Covered (pure logic, `*.test.mjs`)
 
-Analytics helpers, content calendar/publish helpers, app-routes, first-paint, and the
-studio channel presets (`features/studio/presets.test.mjs`).
+Analytics helpers, content calendar/publish helpers, app-routes, first-paint, the
+studio channel presets (`features/studio/presets.test.mjs`), and the token lifecycle
+helpers (`lib/token-lifecycle.mjs`: JWT exp parsing, proactive-refresh decisions,
+auth-endpoint detection for the 401 refresh/retry glue in `lib/http.ts`).
 
 ## Known gaps (follow-ups)
 

@@ -9,14 +9,15 @@ export type Me = {
 };
 
 // The login endpoint uses OAuth2PasswordRequestForm → form-encoded fields.
-export async function login(email: string, password: string): Promise<string> {
+export type TokenPair = { access_token: string; refresh_token: string };
+
+export async function login(email: string, password: string): Promise<TokenPair> {
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ username: email, password }),
   });
-  const data = await parse<{ access_token: string }>(res);
-  return data.access_token;
+  return parse<TokenPair>(res);
 }
 
 export function fetchMe(): Promise<Me> {
