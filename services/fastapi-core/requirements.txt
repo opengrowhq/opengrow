@@ -50,7 +50,7 @@ bcrypt==4.0.1
 httpx==0.28.1
 
 # Tenant-owned Stripe revenue analytics (BYOK — read-only charge events)
-stripe==15.4.0
+stripe==15.6.1
 
 # LLM abstraction (ALL model calls route here)
 litellm==1.96.0
