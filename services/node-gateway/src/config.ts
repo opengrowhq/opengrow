@@ -17,6 +17,17 @@ export async function loadConfig(): Promise<Config> {
     token: process.env.INFISICAL_TOKEN!,
   });
 
+  // Fail loudly when Infisical is configured but the JWT secret came back
+  // empty — booting with no JWT secret would let the edge auth verify
+  // nothing. In lite mode (no Infisical token) this check is skipped; the
+  // auth middleware rejects the empty secret on its own path.
+  const infisicalConfigured = Boolean(process.env.INFISICAL_TOKEN);
+  if (infisicalConfigured && !secrets.JWT_SECRET) {
+    throw new Error(
+      'Infisical is configured (INFISICAL_TOKEN set) but returned no JWT_SECRET — refusing to boot',
+    );
+  }
+
   return {
     serviceName: process.env.SERVICE_NAME ?? 'node-gateway',
     env: process.env.NODE_ENV ?? 'development',
