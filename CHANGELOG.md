@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- feat(core): 35 content-creation methodology playbooks (SEO, schema, E-E-A-T,
+  formatting, readability, repurposing, and more) ship as seeded global
+  defaults — one active system playbook per generation kind
+  (ARTICLE_OUTLINE / ARTICLE_DRAFT / GENERIC_COPY, `tenant_id NULL`) via
+  migration `029_seed_system_playbooks`; every generation uses them out of the
+  box and a tenant playbook still overrides the global default for its kind.
+
 - feat: httpOnly cookie sessions via node-gateway — `og_at`/`og_rt` cookies
   on login/refresh/set-password/invite-accept, tokens stripped from response
   bodies, `x-og-auth` mode header, gateway-local `POST /auth/logout` +
