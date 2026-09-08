@@ -283,8 +283,9 @@ remains here; members/roles landed via the invites feature.
 - **Storybook** (deferred — see §13): stories per primitive + interaction/a11y
   tests; visual regression.
 - **E2E**: Playwright over the critical paths (onboarding → generate → save → approve → export/publish) against the lite stack — deferred until the flows stabilize.
-- CI gates: typecheck, eslint, unit tests, Lighthouse CI budget. (Playwright smoke
-  joins once e2e lands.)
+- CI gates today: typecheck (build), eslint, backend pytest — see
+  `.github/workflows/ci.yml`. Frontend unit tests run via `npm run test:unit` /
+  `npm test` (Playwright smoke joins once e2e lands).
 Every new or changed UI functionality must include focused tests in the same change. If the full browser harness is not in place, add the closest useful lower-level test and document the gap.
 
 ---

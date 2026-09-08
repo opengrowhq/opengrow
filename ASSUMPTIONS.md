@@ -239,7 +239,8 @@ All variables required to run OpenGrow, exhaustively:
 7. Retention / soft-delete sweep — models have `is_deleted` flag; scheduled
    cleanup task not yet implemented.
 8. Refresh token rotation — shipped. `POST /auth/refresh` rotates the token
-   pair (the old refresh token must be discarded; see `docs/API.md`). The
+   pair (the old refresh token must be discarded; see
+   `services/fastapi-core/docs/API.md`). The
    frontend refreshes proactively near access-token expiry and again on a 401
    (single-flight, one retry). A server-side revocation store still does not
    exist. In gateway deployments the BFF injects the refresh token into the
