@@ -802,11 +802,6 @@ async def publish_content(
         channel_enum = PublicationChannel(channel)
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown channel: {channel}")
-    if not is_implemented(channel):
-        raise HTTPException(
-            status.HTTP_501_NOT_IMPLEMENTED,
-            f"{channel} publishing is planned but not implemented yet",
-        )
 
     adapter = get_adapter(channel)
     safe_target = {"channel": channel} | {
