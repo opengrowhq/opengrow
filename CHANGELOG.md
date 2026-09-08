@@ -200,7 +200,7 @@ attribution** — runs locally, in both Lite (personal) and Production
   (`/usage`), and an optional Redis rate limiter (off by default).
 
 **Deployment**
-- Lite (5 services, ~5-minute `make lite-up`) and Production (15 services,
+- Lite (8 services, ~5-minute `make lite-up`) and Production (15 services,
   Infisical secrets, Caddy auto-TLS, ClamAV, LiteLLM proxy, Qdrant) from the same
   `services/fastapi-core/app/` code, switched by `DEPLOYMENT_MODE`.
 
