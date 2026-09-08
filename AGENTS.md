@@ -158,11 +158,41 @@ services/fastapi-core/app/
 └── workers/      # Celery tasks — always @celery.task(name="app.workers.tasks.<name>")
 
 services/node-gateway/src/
-├── config.ts     # Loads Infisical secrets at boot
-├── infisical.ts  # Minimal REST client (no SDK)
-├── middleware/   # JWT verify (currently only auth)
-├── routes/       # Local routes (currently only /health, /ready)
-└── server.ts     # Fastify bootstrap + reverse proxy registration
+├── config.ts       # Loads Infisical secrets at boot
+├── infisical.ts    # Minimal REST client (no SDK)
+├── cookies.ts      # Cookie-mode auth helpers (pure, unit-tested)
+├── middleware/     # JWT verify (currently only auth)
+├── routes/         # Local routes: /health, /ready + /auth/logout, /auth/session
+├── app.ts          # buildApp(cfg) — everything except listen (testable via app.inject)
+└── server.ts       # Thin bootstrap: loadConfig → buildApp → listen
+```
+
+### Cookie-mode auth (gateway deployments)
+
+The BFF moves JWTs out of browser storage (see ASSUMPTIONS.md §9):
+
+- **onSend interception** on `POST /auth/login`, `/auth/refresh`,
+  `/auth/set-password` (hosted overlay route, proxied via `/auth`), and
+  `/invites/{token}/accept`: token pairs are stripped from the JSON body and
+  delivered as `og_at` (path `/`) / `og_rt` (path `/auth`) httpOnly Secure
+  SameSite=Strict cookies; the response is marked `x-og-auth: cookie`
+  (exposed via CORS so the frontend can detect the mode). Pure decision
+  logic lives in `cookies.ts` (`maybeRewriteAuthResponse`) — the hook is a
+  thin adapter and must never throw.
+- **Cookie → Bearer injection**: an `onRequest` hook (registered BEFORE the
+  edge-auth hook — order matters) copies `og_at` into the Authorization
+  header; edge JWT verify is unchanged. `/auth/refresh` also gets `og_rt`
+  injected into the proxied JSON body via the `/auth` proxy's `preHandler`
+  (the browser can't read the httpOnly cookie itself).
+- **Local routes** (static routes shadow the proxy wildcard):
+  `POST /auth/logout` (expires both cookies, 204) and `POST /auth/session`
+  (one-shot handoff for OAuth-callback URL fragments into httpOnly cookies;
+  requires `X-Requested-With: XMLHttpRequest`, 30/min/IP — session-fixation
+  guards; tokens are NOT validated there — the edge check rejects bad cookies
+  on the next request).
+- `PUBLIC_PATHS` must list both local routes; `buildApp(cfg)` takes a fake
+  `Config` in tests (`cookieSecure: boolean | null` — `null` = auto-detect
+  per request, requires `trustProxy: true`).
 ```
 
 ## Endpoint conventions

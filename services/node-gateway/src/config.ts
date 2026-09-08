@@ -1,4 +1,4 @@
-import { fetchInfisicalSecrets } from './infisical.js';
+import { fetchInfisicalSecrets } from "./infisical.js";
 
 export interface Config {
   serviceName: string;
@@ -6,7 +6,13 @@ export interface Config {
   port: number;
   fastapiUrl: string;
   jwtSecret: string;
-  jwtAlgorithm: 'HS256';
+  jwtAlgorithm: "HS256";
+  /**
+   * Set the `Secure` flag on session cookies. `null` = auto-detect per
+   * request (`request.protocol === 'https'` — Caddy terminates TLS, so the
+   * gateway sees plain HTTP unless trustProxy is on).
+   */
+  cookieSecure: boolean | null;
 }
 
 export async function loadConfig(): Promise<Config> {
@@ -24,16 +30,24 @@ export async function loadConfig(): Promise<Config> {
   const infisicalConfigured = Boolean(process.env.INFISICAL_TOKEN);
   if (infisicalConfigured && !secrets.JWT_SECRET) {
     throw new Error(
-      'Infisical is configured (INFISICAL_TOKEN set) but returned no JWT_SECRET — refusing to boot',
+      "Infisical is configured (INFISICAL_TOKEN set) but returned no JWT_SECRET — refusing to boot",
     );
   }
 
   return {
-    serviceName: process.env.SERVICE_NAME ?? 'node-gateway',
-    env: process.env.NODE_ENV ?? 'development',
+    serviceName: process.env.SERVICE_NAME ?? "node-gateway",
+    env: process.env.NODE_ENV ?? "development",
     port: 3001,
-    fastapiUrl: process.env.FASTAPI_URL ?? 'http://fastapi-core:8000',
-    jwtSecret: secrets.JWT_SECRET ?? '',
-    jwtAlgorithm: 'HS256',
+    fastapiUrl: process.env.FASTAPI_URL ?? "http://fastapi-core:8000",
+    jwtSecret: secrets.JWT_SECRET ?? "",
+    jwtAlgorithm: "HS256",
+    // COOKIE_SECURE='true'|'false' pins the Secure flag; empty = auto-detect
+    // from the request protocol (see Config.cookieSecure).
+    cookieSecure:
+      process.env.COOKIE_SECURE === "true"
+        ? true
+        : process.env.COOKIE_SECURE === "false"
+          ? false
+          : null,
   };
 }
