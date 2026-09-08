@@ -35,11 +35,11 @@ Design principles:
 | Styling | **Tailwind v4** + design tokens | utility-first, tokenized theming |
 | Components | **shadcn/ui** (Radix primitives) + a local component library | accessible, unstyled-primitive base |
 | Server state | **TanStack Query** | caching, dedupe, pagination, optimistic updates |
-| Client/UI state | **Zustand** (+ URL state, React state) | small, no boilerplate; see §6 |
+| Client/UI state | **React state + URL state** (Zustand deferred — see §6/§13) | ~no global client state today |
 | Forms | **React Hook Form + Zod** | typed validation shared with the API layer |
 | Data viz | lightweight chart lib (analytics phase) | tree-shakeable |
-| Component docs | **Storybook** | isolated component dev + visual review |
-| Testing | Vitest + Testing Library (unit/component), Playwright (e2e) | + Storybook interaction tests |
+| Component docs | **Storybook** — *deferred* until the component library outgrows the app (see §13) | — |
+| Testing | Vitest + Testing Library (components), `node --test` for pure logic; Playwright (e2e) deferred | see §11 |
 
 All dependency choices follow the **latest-stable / zero-CVE** rule in `AGENTS.md`.
 
@@ -57,8 +57,7 @@ deletable/movable.
 ```
 services/frontend/src/
 ├── app/                      # Next routes ONLY — thin; delegate to features
-│   ├── page.tsx              # public marketing homepage
-│   ├── pricing/              # public pricing + checkout funnel
+│   ├── page.tsx              # redirects to /login (no marketing site in OSS)
 │   ├── login/                # public auth form
 │   └── app/[slug]/           # authenticated tenant surface
 │       ├── page.tsx          # pages/slugs dashboard
@@ -90,8 +89,8 @@ Migrate incrementally:
    `features/content` (keep `lib/api.ts` split per-feature `api.ts` that re-use a
    shared `lib/http.ts`).
 2. Keep authenticated routes under `app/[slug]/...` with a shared sidebar shell.
-3. Add TanStack Query + Zustand (replace ad-hoc `fetch`/`useState`/polling).
-4. Extract UI primitives into `components/ui` and document in Storybook.
+3. TanStack Query is in; add Zustand only with the first real global client state (it is deliberately deferred — see §13).
+4. Extract UI primitives into `components/ui`; introduce Storybook only when the library (or contributor count) justifies it.
 
 Do this **before** building analytics/billing so those land on the stable core.
 
@@ -101,14 +100,18 @@ Do this **before** building analytics/billing so those land on the stable core.
 
 Pick per route, not globally:
 
-- **Marketing pages** (`(marketing)`): **SSG/ISR** — ultra-fast, SEO-critical, cached at the edge/CDN. `revalidate` for pricing/changelog.
-- **Authenticated app** (`/app/[slug]/...`): mostly **client components** talking to the API via TanStack Query today (token in memory). Use **RSC + streaming (Suspense)** for shells and above-the-fold once auth moves to an httpOnly cookie (§7) so the server can fetch.
+- **Marketing/pricing pages**: **not part of the open-source app** — the OSS
+  root redirects to `/login`; marketing and pricing surfaces are hosted-only.
+  In OSS, skip SSG/ISR marketing concerns entirely.
+- **Authenticated app** (`/app/[slug]/...`): mostly **client components** talking to the API via TanStack Query today. With cookie-mode auth shipped via the BFF (§7), **RSC + streaming (Suspense)** becomes available for shells and above-the-fold data so the server can fetch.
 - **Onboarding**: client-driven (live progress), server shell for speed.
 - Use **`loading.tsx` + Suspense** for skeletons; stream slow sections instead of blocking.
 
-> Constraint today: auth token lives in `localStorage`, so server components
-> can't fetch authed data (no cookie). Moving to a BFF-set httpOnly cookie (§7)
-> unlocks RSC data fetching and better LCP. Track this as a core-phase task.
+> Note: in **lite mode** the auth token still lives in `localStorage` (Bearer
+> header), so server components can't fetch authed data there. In **gateway
+> deployments** the BFF delivers the token pair as httpOnly cookies (§7), which
+> unlocks RSC data fetching and better LCP — migrating shell routes to RSC is
+> the follow-up.
 
 ---
 
@@ -116,7 +119,7 @@ Pick per route, not globally:
 
 - **Atomic layering**: tokens → primitives (`components/ui`, shadcn/Radix) → feature components → pages.
 - **Design tokens** (Tailwind v4 `@theme`): color, spacing, radius, typography, elevation, motion. One source of truth; dark mode via tokens.
-- **Storybook** for every primitive + key feature component (states: empty/loading/error/success), with a11y and interaction tests.
+- **Storybook** (deferred — see §13) for every primitive + key feature component once adopted (states: empty/loading/error/success), with a11y and interaction tests.
 - Consistent **empty / loading / error** states are first-class (they're most of perceived quality).
 
 ### 5.1 Component patterns (conventions)
@@ -148,11 +151,11 @@ Categorize state; don't over-globalize:
 | Kind | Tool | Examples |
 |---|---|---|
 | Server/remote | **TanStack Query** | brand profile, content list, generation status (polling → later SSE), publications |
-| Global client/UI | **Zustand** | session/user, theme, command-palette, active workspace |
+| Global client/UI | **React state + Context** (Zustand deferred — see §13) | session/user, theme, active workspace |
 | URL state | route/searchParams | filters, tabs, pagination, selected id |
 | Local | `useState`/RHF | form inputs, toggles, wizard step |
 
-Rules: server data is **never** copied into Zustand — Query owns it. Use
+Rules: server data is **never** copied into a client store — Query owns it. Use
 **optimistic updates** for lifecycle transitions and edits; **invalidate** on
 mutation. Job progress (generation/publish/video): poll via Query today,
 migrate to **SSE/WebSocket** when the backend adds it.
@@ -161,8 +164,23 @@ migrate to **SSE/WebSocket** when the backend adds it.
 
 ## 7. Auth & data transport
 
-- **Now (scaffold)**: token in `localStorage`, `Authorization: Bearer` header, CORS from the API. Fine for lite/dev.
-- **Target**: BFF (`node-gateway`) sets an **httpOnly, SameSite cookie**; the browser never holds the token; RSC and route handlers can fetch server-side. Add CSRF protection for cookie mode. This is a **core-phase** item — it improves security *and* rendering.
+Two transports, both shipped and both must keep working:
+
+- **Lite (Bearer)**: token pair in `localStorage` (`opengrow.token` /
+  `opengrow.refresh`), `Authorization: Bearer` header on every call, CORS from
+  the API. Fine for lite/dev.
+- **Cookie mode (gateway deployments) — shipped**: the BFF (`node-gateway`)
+  strips token pairs from login/refresh/set-password/invite-accept responses
+  into `og_at` (path `/`) / `og_rt` (path `/auth`) **httpOnly, Secure,
+  SameSite=Strict** cookies and marks the response `x-og-auth: cookie`; the
+  browser never holds the token, so JS can't leak it. Gateway-local routes:
+  `POST /auth/logout` (expires both cookies) and `POST /auth/session`
+  (one-shot handoff for OAuth-callback URL fragments). Every API fetch sends
+  `credentials: "include"`. See `services/frontend/AGENTS.md`.
+  - **CSRF**: resolved by design — `SameSite=Strict` blocks cross-site
+    request cookies, and `POST /auth/session` additionally requires
+    `X-Requested-With: XMLHttpRequest` plus rate limiting (session-fixation
+    guards).
 - One typed HTTP layer (`lib/http.ts`) with interceptors (auth, refresh, error normalization); per-feature `api.ts` builds on it; response types shared with backend via generated types or hand-kept Zod schemas.
 
 ---
@@ -180,10 +198,11 @@ Targets: **LCP < 2.5s, INP < 200ms, CLS < 0.1** (field data).
 
 ---
 
-## 9. The UX — screens & flows (beating Holo)
+## 9. The UX — screens & flows
 
-Holo's flow: URL → swipe ideas → edit → **download & publish**. We keep the fast,
-delightful bits and fix the dead-ends.
+Positioning against desktop-only incumbents; detailed competitor analysis is
+maintained outside this repo. The flow below keeps the fast, delightful bits
+of the reference class and fixes the dead-ends.
 
 ### 9.1 Onboarding (the make-or-break)
 Chrome-less, ≤5 steps, resumable, with a live progress feel:
@@ -194,7 +213,7 @@ Chrome-less, ≤5 steps, resumable, with a live progress feel:
 4. **First generation** — pre-filled brief from the brand → produce 3–5 variants **in the onboarding itself** (the "aha").
 5. **Land in the app** with a **setup checklist** (connect a publish channel, invite a teammate) — progressive, dismissible.
 
-Beat Holo: **works on mobile**, resumable, and the first *publish* (not just download) is one click away.
+Differentiation: **works on mobile**, resumable, and the first *publish* (not just download) is one click away.
 
 ### 9.2 App shell
 Left **sidebar** (Home, Ads, Socials, Emails, Library, Brand DNA) plus a bottom-left OpenGrow account/workspace popover. Canonical app pages live under `/app/[slug]/...`; top-level `/brand`, `/content`, and `/onboarding` are not app URLs.
@@ -204,7 +223,7 @@ Left **sidebar** (Home, Ads, Socials, Emails, Library, Brand DNA) plus a bottom-
 
 ### 9.4 Studio (generation)
 - **Format picker** (ad / social / email / blog / image / video) → **brief** (pre-filled from brand) → variant count.
-- **Review** generated variants: a **gallery + swipe/keyboard** pattern (accept/skip/compare) — better than Holo's one-at-a-time-only: multi-select, side-by-side, keyboard shortcuts, undo.
+- **Review** generated variants: a **gallery + swipe/keyboard** pattern — multi-select, side-by-side, keyboard shortcuts, undo (not one-at-a-time-only).
 - **Refine**: conversational editor ("make the headline punchier") **plus** direct inline editing and a **version history** — not chat-only.
 - Every accepted variant → **"Save as content"** → the content lifecycle.
 
@@ -252,17 +271,21 @@ remains here; members/roles landed via the invites feature.
 ## 10. Accessibility & i18n
 
 - WCAG 2.2 AA: keyboard-navigable, focus management (dialogs/sheets), ARIA via Radix, color-contrast tokens, reduced-motion.
-- i18n-ready structure (Holo advertises 99+ languages): externalize copy, `next-intl`-style routing, locale-aware formatting — even if we ship English first.
+- i18n-ready structure: externalize copy, `next-intl`-style routing, locale-aware formatting — even if we ship English first.
 
 ---
 
 ## 11. Testing
 
-- **Unit/component**: Vitest + Testing Library.
-- **Current lightweight layer**: `npm test` runs focused Node tests for route helpers, GitHub publish form defaults, and other framework-independent contracts.
-- **Storybook**: stories per primitive + interaction/a11y tests; visual regression.
-- **E2E**: Playwright over the critical paths (onboarding → generate → save → approve → export/publish) against the lite stack.
-- CI gates: typecheck, eslint, unit + a11y, Lighthouse CI budget, Playwright smoke.
+- **Unit/component**: Vitest + Testing Library for components; `node --test`
+  (`*.test.mjs` / `*.mjs`) for framework-independent logic (route helpers,
+  auth transport, publish form defaults, token lifecycle).
+- **Storybook** (deferred — see §13): stories per primitive + interaction/a11y
+  tests; visual regression.
+- **E2E**: Playwright over the critical paths (onboarding → generate → save → approve → export/publish) against the lite stack — deferred until the flows stabilize.
+- CI gates today: typecheck (build), eslint, backend pytest — see
+  `.github/workflows/ci.yml`. Frontend unit tests run via `npm run test:unit` /
+  `npm test` (Playwright smoke joins once e2e lands).
 Every new or changed UI functionality must include focused tests in the same change. If the full browser harness is not in place, add the closest useful lower-level test and document the gap.
 
 ---
@@ -291,7 +314,7 @@ paying the cost now.
 
 | Phase | Deliverable |
 |---|---|
-| **F0 — Core (now)** | TanStack Query (replaces hand-rolled fetch/poll) + light feature-based reorg. Cookie-auth via BFF as the next core item. **Defer** Zustand + Storybook until they earn their place (see note). |
+| **F0 — Core (shipped / now)** | TanStack Query (replaces hand-rolled fetch/poll) + light feature-based reorg. **Cookie-auth via the BFF is shipped** (§7). **Defer** Zustand + Storybook until they earn their place (see note). |
 | **F1 — Onboarding + Brand** | URL → live Brand DNA extraction UX, review/edit, setup checklist |
 | **F2 — Studio** | Format picker → brief → variant review (gallery/swipe) → conversational + inline refine + versions |
 | **F3 — Content + Publish** | Editor polish, in-app GitHub publish UX, publications tracking (builds on scaffold) |
@@ -318,4 +341,4 @@ content→publish path is the spine; Studio media and analytics layer on after.
 - Generated API types (openapi-typescript from FastAPI `/openapi.json`) vs hand-kept Zod schemas — pick one and automate.
 - SSE vs WebSocket for job progress (currently polling).
 - Chart lib choice (analytics phase).
-- Confirm cookie-auth CSRF strategy with the BFF.
+- ~~Confirm cookie-auth CSRF strategy with the BFF~~ — resolved by design: SameSite=Strict + `X-Requested-With` on `/auth/session` (§7).

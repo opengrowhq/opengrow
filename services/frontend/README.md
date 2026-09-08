@@ -25,10 +25,14 @@ Ports/API base are configurable via `HOST_FRONTEND_PORT` /
 
 ```bash
 cd services/frontend
-cp .env.example .env.local        # defaults to http://localhost:8000 (lite)
 npm install
+echo 'NEXT_PUBLIC_API_BASE=http://localhost:8000' > .env.local   # lite: reach fastapi-core directly
 npm run dev                       # http://localhost:3000
 ```
+
+(The code default for `NEXT_PUBLIC_API_BASE` is **empty** = same-origin
+relative calls, which is what gateway/cookie-mode deployments need. Outside
+Docker against the lite stack you must set it explicitly, as above.)
 
 ## Docker image targets
 

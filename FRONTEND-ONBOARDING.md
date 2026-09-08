@@ -29,12 +29,17 @@ Full API conventions live in **`services/fastapi-core/docs/API.md`** — read it
 ```bash
 cd services/frontend
 npm install
+echo 'NEXT_PUBLIC_API_BASE=http://localhost:8000' > .env.local   # lite: reach fastapi-core directly
 npm run dev        # http://localhost:3000
 npm test           # node --test *.mjs (logic tests)
 npm run lint
 ```
 
-`NEXT_PUBLIC_API_BASE` (default `http://localhost:8000`) points the browser at the API.
+`NEXT_PUBLIC_API_BASE` (default: **empty** = same-origin relative calls) points
+the browser at the API. The empty default is required for cookie mode (the
+gateway must be same-origin so the httpOnly cookies attach); Caddy routes
+`/auth/*` and `/api/*` to the gateway. The lite compose sets it explicitly to
+`http://localhost:8000` so the browser reaches fastapi-core directly.
 
 ## 3. Codebase map
 
@@ -48,8 +53,8 @@ services/frontend/src/
     hooks.ts           # TanStack Query hooks
     components/        # UI
   lib/
-    http.ts            # apiGet / apiSend / API_BASE / ApiError
-    auth.ts            # token in localStorage ("opengrow.token")
+    http.ts            # apiGet / apiSend / API_BASE / ApiError — sends credentials: "include" on every call
+    auth.ts            # both transports: lite keeps Bearer tokens in localStorage; cookie mode is flagged by the x-og-auth header
     app-routes.mjs     # appPath()/appRootPath()/resolvePostAuthPath()
     use-mounted.ts     # hydration-safe mount gate (see gotcha #1)
 ```
@@ -58,9 +63,19 @@ Stack: **Next.js 16 (App Router)**, React, TypeScript, Tailwind, **TanStack Quer
 
 ## 4. API essentials
 
-- **Auth:** `POST /auth/login` (form-encoded `username`/`password`) → `{ access_token }`.
-  Send `Authorization: Bearer <token>` on every other call (see `lib/http.ts`).
-  `GET /auth/me` → `{ id, email, tenant_id, tenant_slug }`.
+- **Auth:** two transports, both live (see `src/lib/auth.ts` + `src/lib/http.ts`):
+  - **Lite** — `POST /auth/login` (form-encoded `username`/`password`) →
+    `{ access_token, refresh_token }`, kept in localStorage and sent as
+    `Authorization: Bearer <token>` on every other call.
+  - **Gateway deployments (cookie mode)** — login/refresh/set-password/invite-accept
+    responses come back with tokens stripped from the body and set as httpOnly
+    `og_at`/`og_rt` cookies instead; the response carries an `x-og-auth: cookie`
+    header the client reads to flip modes. Every fetch sends
+    `credentials: "include"`; JavaScript never sees the tokens. The gateway
+    serves `POST /auth/logout` (clears the cookies) and `POST /auth/session`
+    (one-shot handoff for OAuth-callback URL fragments; requires
+    `X-Requested-With: XMLHttpRequest`).
+  - `GET /auth/me` → `{ id, email, tenant_id, tenant_slug }`.
 - **Tenancy:** everything is scoped to the token's tenant. Never pass a tenant id;
   cross-tenant access → `404`.
 - **Pagination (optional):** `?limit=&offset=` on list endpoints; total in the

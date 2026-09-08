@@ -43,6 +43,17 @@ test("invite acceptance is public (pre-auth token-issuing flow)", () => {
   assert.equal(isPublicPath("/invites/abc123/revoke"), false);
 });
 
+test("billing webhooks are public (provider-signed, no user token)", () => {
+  assert.equal(isPublicPath("/billing/webhook"), true);
+  assert.equal(isPublicPath("/billing/webhook/stripe"), true);
+  assert.equal(isPublicPath("/billing/webhook/paddle"), true);
+  // Other /billing routes require auth at the edge.
+  assert.equal(isPublicPath("/billing"), false);
+  assert.equal(isPublicPath("/billing/subscribe"), false);
+  assert.equal(isPublicPath("/billing/config"), false);
+  assert.equal(isPublicPath("/billing/webhook/stripe/extra"), false);
+});
+
 test("sensitive routes require auth at the edge", () => {
   assert.equal(isPublicPath("/auth/me"), false);
   assert.equal(isPublicPath("/content"), false);

@@ -12,8 +12,11 @@ import {
 } from "./auth";
 import { isAuthEndpoint, shouldRefresh } from "./token-lifecycle.mjs";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+// Empty (the default) = same-origin relative calls — required for cookie
+// mode, where Caddy routes /auth/* and /api/* to the gateway. Lite deployments
+// set NEXT_PUBLIC_API_BASE explicitly (docker-compose.lite.yml uses
+// http://localhost:8000).
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
 export class ApiError extends Error {
   constructor(
