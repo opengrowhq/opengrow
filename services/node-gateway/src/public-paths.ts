@@ -7,7 +7,8 @@
 // BFF routes /auth/logout and /auth/session are public by design (logout is
 // idempotent; /auth/session is fixation-guarded, see routes/auth.ts). The
 // first-party tracking endpoints are hit by anonymous visitors on customers'
-// published pages, so they must stay open.
+// published pages, so they must stay open. Billing webhooks are called by
+// provider services (Paddle/Stripe/…) with no user token of their own.
 const PUBLIC_PATHS = new Set<string>([
   "/health",
   "/ready",
@@ -18,6 +19,8 @@ const PUBLIC_PATHS = new Set<string>([
   "/auth/session",
   "/analytics/pixel.gif",
   "/analytics/track",
+  // Legacy billing webhook (hosted billing overlay).
+  "/billing/webhook",
 ]);
 
 // Public path shapes with a dynamic segment (exact paths live in PUBLIC_PATHS).
@@ -25,6 +28,9 @@ const PUBLIC_PATTERNS: RegExp[] = [
   // POST /invites/{token}/accept — invite acceptance is a pre-auth login-like
   // flow that returns a token pair.
   /^\/invites\/[^/]+\/accept$/,
+  // POST /billing/webhook/{provider} — provider-signed webhooks carry no
+  // user token; signature verification happens upstream.
+  /^\/billing\/webhook\/[^/]+$/,
 ];
 
 // API namespaces proxied 1:1 to fastapi-core (same paths the frontend/lite use).
@@ -40,6 +46,9 @@ export const PROXIED_PREFIXES = [
   "/invites",
   "/playbooks",
   "/orchestrator",
+  // Hosted billing overlay APIs — proxied 1:1; all /billing routes stay
+  // edge-auth protected except the webhook paths above.
+  "/billing",
 ];
 
 /** True when `pathname` (no query string) may skip gateway auth. */
