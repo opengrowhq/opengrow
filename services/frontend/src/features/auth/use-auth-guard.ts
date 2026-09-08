@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
-import { loadToken } from "@/lib/auth";
+import { hasSession } from "@/lib/auth";
+import { ensureSession } from "@/lib/http";
 
 const AUTH_EVENT = "opengrow:auth";
 
@@ -21,12 +22,12 @@ function subscribe(callback: () => void) {
 export function useHasToken(): boolean {
   return useSyncExternalStore(
     subscribe,
-    () => !!loadToken(),
+    () => hasSession(),
     () => false,
   );
 }
 
-/** Redirect to /login if there's no session token. */
+/** Redirect to /login if there's no session under either auth transport. */
 export function useAuthGuard(): boolean {
   const router = useRouter();
   const hasToken = useHasToken();
@@ -38,7 +39,16 @@ export function useAuthGuard(): boolean {
   }, []);
 
   useEffect(() => {
-    if (checked && !hasToken) router.replace("/login");
+    if (!checked || hasToken) return;
+    let cancelled = false;
+    // Cookie mode after a page reload: no localStorage token, but the og_rt
+    // cookie may still yield a session. Only redirect when it doesn't.
+    void ensureSession().then((restored) => {
+      if (!cancelled && !restored) router.replace("/login");
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [checked, hasToken, router]);
 
   return hasToken;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { loadToken } from "@/lib/auth";
+import { hasSession } from "@/lib/auth";
 import {
   type Brand,
   type BrandProfile,
@@ -11,7 +11,7 @@ import {
   updateBrand,
 } from "./api";
 
-const hasToken = () => !!loadToken();
+const hasToken = () => hasSession();
 const TERMINAL = ["READY", "FAILED"];
 
 export function useBrands() {

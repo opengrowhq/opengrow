@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { loadToken } from "@/lib/auth";
+import { hasSession } from "@/lib/auth";
 import {
   approveOrchestratorOutline,
   createOrchestratorRun,
@@ -25,7 +25,7 @@ export function useOrchestratorRuns() {
   return useQuery({
     queryKey: ["orchestrator", "runs"],
     queryFn: listOrchestratorRuns,
-    enabled: !!loadToken(),
+    enabled: hasSession(),
     refetchInterval: (q) =>
       hasActiveRun(q.state.data as OrchestratorRun[] | undefined) ? 3000 : false,
   });
@@ -35,7 +35,7 @@ export function useOrchestratorRun(id: string | null) {
   return useQuery({
     queryKey: ["orchestrator", "runs", id],
     queryFn: () => getOrchestratorRun(id as string),
-    enabled: !!id && !!loadToken(),
+    enabled: !!id && hasSession(),
     refetchInterval: (q) => {
       const s = (q.state.data as OrchestratorRun | undefined)?.status;
       return s && STALLED.includes(s) ? false : 2000;
