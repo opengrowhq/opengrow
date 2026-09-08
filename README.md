@@ -44,7 +44,7 @@ The full loop runs locally today — **context → content → publish → attri
 - Brand/context asset upload → async processing (MinIO + Celery + embeddings; Qdrant in production)
 - AI generation from a brief, with uploaded assets as context — **bring your own** OpenAI / Anthropic / Google, or run **free & local with Ollama**
 - Content lifecycle: draft → review → approve → Markdown export, with status/next-action planning
-- Versioned **playbooks** — tenant-customizable system prompts for outline/draft/generic-copy generation, with fallback to a global default (`/playbooks`)
+- Versioned **playbooks** — tenant-customizable system prompts for outline/draft/generic-copy generation (`/playbooks`). 35 content-creation methodology playbooks ship as seeded global defaults (one per generation kind); a tenant playbook overrides the global default for its kind
 
 **Orchestrate** — one call runs the whole content cycle end to end (`POST /orchestrator/runs`)
 - **Keyword research**: a bare topic gets a real primary/secondary keyword set via no-API-key scraping (Google Autocomplete + Bing SERP/PAA) — skipped automatically if you already supply a keyword
