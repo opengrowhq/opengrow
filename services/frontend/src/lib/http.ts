@@ -4,7 +4,7 @@ import { clearToken, loadRefreshToken, loadToken, saveTokenPair } from "./auth";
 import { isAuthEndpoint, shouldRefresh } from "./token-lifecycle.mjs";
 
 export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
 export class ApiError extends Error {
   constructor(

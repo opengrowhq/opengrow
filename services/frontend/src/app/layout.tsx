@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   // Open Graph and Twitter card URLs must be absolute. Next resolves
   // app/opengraph-image.png against this; without it the tags are emitted
   // relative and most crawlers drop the preview image.
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"),
   title: "OpenGrow Studio",
   description: "AI content growth engine",
 };
