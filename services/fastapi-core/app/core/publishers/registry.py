@@ -1,9 +1,9 @@
 """Channel → adapter dispatch.
 
-Implemented adapters expose `async publish(*, title, body, config) -> PublishResult`.
-Known-but-unimplemented channels are advertised (so the API surface + enum exist
-for clients to design against) but return 501 until built. GitHub PR has its own
-dedicated endpoint and is intentionally not routed through the generic publisher.
+Every known channel has an implemented adapter exposing
+`async publish(*, title, body, config) -> PublishResult`. GitHub PR has its
+own dedicated endpoint and is intentionally not routed through the generic
+publisher.
 """
 
 from __future__ import annotations

@@ -149,6 +149,8 @@ Authenticated frontend routes live under the tenant slug:
 - `/app/demo/brand` — Brand DNA
 - `/app/demo/content` — Library
 - `/app/demo/content/{id}` — editor
+- `/app/demo/articles` — Article Studio
+- `/app/demo/analytics` — Analytics
 - `/app/demo/calendar` — status/next-action calendar
 - `/app/demo/onboarding` — brand onboarding
 

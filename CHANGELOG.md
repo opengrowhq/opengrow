@@ -6,6 +6,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- feat: httpOnly cookie sessions via node-gateway — `og_at`/`og_rt` cookies
+  on login/refresh/set-password/invite-accept, tokens stripped from response
+  bodies, `x-og-auth` mode header, gateway-local `POST /auth/logout` +
+  `POST /auth/session`; lite mode (Bearer tokens) unchanged; core CORS
+  `allow_credentials=True`.
+- feat(frontend): Google OAuth login button (shown only when the backend
+  mounts the hosted OAuth routes) with a token-fragment handoff via
+  `POST /auth/session`.
+- feat(frontend): token refresh wiring — proactive refresh near access-token
+  expiry plus a 401 single-flight retry.
+- feat: frontend service in the production compose stack (16 services) with
+  real `Caddyfile.prod` routing and `NEXT_PUBLIC_*` build args.
+- feat: gateway proxies `/billing` for hosted overlay deployments, including
+  public provider webhook paths (`/billing/webhook`,
+  `/billing/webhook/{provider}`).
+
 ## [0.3.0] — Billing removed from core
 
 The billing features that shipped in 0.2.0 (Stripe Checkout/Billing
@@ -108,10 +126,10 @@ surface — 19 tools, up from the base `/mcp` server.
 - Prepaid credit balance with a hard stop on exhausted credit (never a
   silent overage charge), billed by real per-model LLM cost — held before
   the call, settled after, refunded on failure.
-- Purchased credit top-ups (fixed €10/€25/€50 tiers) for tenants who need
+- Purchased credit top-ups (fixed tiers) for tenants who need
   more than their plan's included allowance before renewal.
-- Seat-based Team pricing: 5 included seats, additional seats billed
-  automatically as members are invited or removed.
+- Seat-based Team pricing: a base number of included seats, with additional
+  seats billed automatically as members are invited or removed.
 - Past-due/dunning warning on the Billing settings card with a direct link
   into the Stripe Portal to update a failed payment method.
 
@@ -182,7 +200,7 @@ attribution** — runs locally, in both Lite (personal) and Production
   (`/usage`), and an optional Redis rate limiter (off by default).
 
 **Deployment**
-- Lite (5 services, ~5-minute `make lite-up`) and Production (15 services,
+- Lite (8 services, ~5-minute `make lite-up`) and Production (15 services,
   Infisical secrets, Caddy auto-TLS, ClamAV, LiteLLM proxy, Qdrant) from the same
   `services/fastapi-core/app/` code, switched by `DEPLOYMENT_MODE`.
 
