@@ -22,6 +22,12 @@ CMD ["npx", "next", "dev", "-H", "0.0.0.0", "-p", "3000", "--turbopack"]
 
 # ---- build (production) ----
 FROM base AS build
+# NEXT_PUBLIC_* is inlined into the client bundle at build time; compose passes
+# these as build args so the prod image bakes the right values.
+ARG NEXT_PUBLIC_API_BASE=""
+ARG NEXT_PUBLIC_SITE_URL=""
+ENV NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
+ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
 ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .

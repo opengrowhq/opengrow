@@ -322,6 +322,36 @@ services:
       retries: 12
       start_period: 20s
 
+  frontend:
+    build:
+      context: ./services/frontend
+      dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_* vars are inlined into the client bundle at BUILD time
+        # (Next.js standalone), so the prod image must receive them as build
+        # args — runtime env below only affects the server side of the app.
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-}
+    restart: unless-stopped
+    environment:
+      # Browser-side base URL for API calls. The fetch runs in the USER'S
+      # BROWSER (not inside the container), so this must be a browser-reachable
+      # URL. Default empty = same-origin relative calls — Caddy routes /auth/*
+      # and /api/* to node-gateway, so no absolute URL is needed in prod.
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-}
+      # Public origin, used to resolve the og:image URL to an absolute one.
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-}
+      NEXT_TELEMETRY_DISABLED: "1"
+    networks: [opengrow]
+    depends_on:
+      node-gateway: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
   caddy:
     image: caddy:2.8-alpine
     restart: unless-stopped
@@ -331,6 +361,7 @@ services:
       - caddy_config:/config
     depends_on:
       node-gateway: { condition: service_healthy }
+      frontend:     { condition: service_healthy }
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:80 || exit 1"]
       interval: 15s

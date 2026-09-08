@@ -88,6 +88,13 @@ services:
       resources:
         limits: { cpus: "1.0", memory: 1G }
 
+  frontend:
+    build:
+      target: runner
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+
   caddy:
     ports:
       - "80:80"
