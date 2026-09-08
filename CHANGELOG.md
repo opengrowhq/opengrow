@@ -6,6 +6,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- feat: httpOnly cookie sessions via node-gateway — `og_at`/`og_rt` cookies
+  on login/refresh/set-password/invite-accept, tokens stripped from response
+  bodies, `x-og-auth` mode header, gateway-local `POST /auth/logout` +
+  `POST /auth/session`; lite mode (Bearer tokens) unchanged; core CORS
+  `allow_credentials=True`.
+- feat(frontend): Google OAuth login button (shown only when the backend
+  mounts the hosted OAuth routes) with a token-fragment handoff via
+  `POST /auth/session`.
+- feat(frontend): token refresh wiring — proactive refresh near access-token
+  expiry plus a 401 single-flight retry.
+- feat: frontend service in the production compose stack (16 services) with
+  real `Caddyfile.prod` routing and `NEXT_PUBLIC_*` build args.
+- feat: gateway proxies `/billing` for hosted overlay deployments, including
+  public provider webhook paths (`/billing/webhook`,
+  `/billing/webhook/{provider}`).
+
 ## [0.3.0] — Billing removed from core
 
 The billing features that shipped in 0.2.0 (Stripe Checkout/Billing
