@@ -238,8 +238,13 @@ All variables required to run OpenGrow, exhaustively:
 6. Prometheus / Grafana — not in compose. See rejections.
 7. Retention / soft-delete sweep — models have `is_deleted` flag; scheduled
    cleanup task not yet implemented.
-8. Refresh token rotation — issued but no server-side revocation store yet.
-   Refresh path unimplemented; only access token flow works in this scaffold.
+8. Refresh token rotation — shipped. `POST /auth/refresh` rotates the token
+   pair (the old refresh token must be discarded; see `docs/API.md`). The
+   frontend refreshes proactively near access-token expiry and again on a 401
+   (single-flight, one retry). A server-side revocation store still does not
+   exist. In gateway deployments the BFF injects the refresh token into the
+   proxied `/auth/refresh` body from the httpOnly `og_rt` cookie, so the
+   browser never sees it.
 9. Analytics imports — revenue events and aggregate manual/GA4/GSC rows can be
    imported through the protected API with channel normalization and import
    dedupe keys. GA4/GSC connector setup records, Google OAuth start URLs, and
