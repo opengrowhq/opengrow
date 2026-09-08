@@ -30,6 +30,7 @@ export async function uploadAsset(file: File): Promise<{ asset_id: string }> {
   return parse(
     await fetch(`${API_BASE}/assets/upload`, {
       method: "POST",
+      credentials: "include",
       headers: authHeaders(), // no Content-Type — browser sets multipart boundary
       body: form,
     }),

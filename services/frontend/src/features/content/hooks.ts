@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { loadToken } from "@/lib/auth";
+import { hasSession } from "@/lib/auth";
 import {
   type ContentPatch,
   type PublishGitHubInput,
@@ -20,7 +20,7 @@ import {
   upsertGitHubCredential,
 } from "./api";
 
-const hasToken = () => !!loadToken();
+const hasToken = () => hasSession();
 
 export function useContentList() {
   return useQuery({

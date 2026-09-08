@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { loadToken } from "@/lib/auth";
+import { hasSession } from "@/lib/auth";
 import {
   type AnalyticsImportProvider,
   type AnalyticsWindow,
@@ -28,7 +28,7 @@ import {
   startRunFromRecommendation,
 } from "./api";
 
-const hasToken = () => !!loadToken();
+const hasToken = () => hasSession();
 
 export function useAttributionSummary(window: AnalyticsWindow = "all") {
   return useQuery({

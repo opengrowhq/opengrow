@@ -11,8 +11,11 @@ export function useMe(enabled = true) {
 export function useLogin() {
   return useMutation({
     mutationFn: async (vars: { email: string; password: string }) => {
-      const pair = await login(vars.email, vars.password);
-      saveTokenPair(pair.access_token, pair.refresh_token);
+      const { pair } = await login(vars.email, vars.password);
+      // Cookie mode: the gateway already set httpOnly cookies (readAuthMode in
+      // login() flagged it); nothing may be saved to localStorage. Only a
+      // real (lite-mode) pair goes into storage.
+      if (pair) saveTokenPair(pair.access_token, pair.refresh_token);
       return fetchMe();
     },
   });

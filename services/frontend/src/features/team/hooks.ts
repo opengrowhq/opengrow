@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { loadToken, saveToken } from "@/lib/auth";
+import { hasSession, saveToken } from "@/lib/auth";
 import {
   acceptInvite,
   createInvite,
@@ -12,7 +12,7 @@ import {
 } from "./api";
 import { fetchMe } from "@/features/auth/api";
 
-const hasToken = () => !!loadToken();
+const hasToken = () => hasSession();
 
 export function useMembers() {
   return useQuery({ queryKey: ["team", "members"], queryFn: listMembers, enabled: hasToken() });
@@ -50,12 +50,13 @@ export function useRemoveMember() {
 export function useAcceptInvite() {
   return useMutation({
     mutationFn: async (vars: { token: string; displayName: string; password: string }) => {
-      const { access_token } = await acceptInvite({
+      const { pair } = await acceptInvite({
         token: vars.token,
         display_name: vars.displayName,
         password: vars.password,
       });
-      saveToken(access_token);
+      // Cookie mode: gateway already set the httpOnly cookies — save nothing.
+      if (pair) saveToken(pair.access_token);
       return fetchMe();
     },
   });

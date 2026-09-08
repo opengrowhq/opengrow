@@ -131,6 +131,7 @@ export const deleteGitHubCredential = () =>
 
 export async function exportMarkdown(id: string): Promise<string> {
   const res = await fetch(`${API_BASE}/content/${id}/export.md`, {
+    credentials: "include",
     headers: authHeaders(),
   });
   if (!res.ok) throw new ApiError(res.status, "Export failed");

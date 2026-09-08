@@ -1,8 +1,11 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { loadConfig } from './config.js';
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { loadConfig } from "./config.js";
 
-function withEnv(patch: Record<string, string>, fn: () => Promise<void>): Promise<void> {
+function withEnv(
+  patch: Record<string, string>,
+  fn: () => Promise<void>,
+): Promise<void> {
   const originals: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(patch)) {
     originals[k] = process.env[k];
@@ -25,17 +28,19 @@ function withFetch(impl: typeof fetch, fn: () => Promise<void>): Promise<void> {
 }
 
 const INFISICAL_ENV = {
-  INFISICAL_URL: 'https://infisical.example.com',
-  INFISICAL_PROJECT_ID: 'proj-1',
-  INFISICAL_ENVIRONMENT: 'dev',
-  INFISICAL_TOKEN: 'tok',
+  INFISICAL_URL: "https://infisical.example.com",
+  INFISICAL_PROJECT_ID: "proj-1",
+  INFISICAL_ENVIRONMENT: "dev",
+  INFISICAL_TOKEN: "tok",
 };
 
-test('boot fails when Infisical is configured but returns no JWT_SECRET', async () => {
+test("boot fails when Infisical is configured but returns no JWT_SECRET", async () => {
   await withEnv(INFISICAL_ENV, () =>
     withFetch(
       (async () =>
-        new Response(JSON.stringify({ secrets: [] }), { status: 200 })) as typeof fetch,
+        new Response(JSON.stringify({ secrets: [] }), {
+          status: 200,
+        })) as typeof fetch,
       async () => {
         await assert.rejects(() => loadConfig(), /returned no JWT_SECRET/);
       },
@@ -43,39 +48,66 @@ test('boot fails when Infisical is configured but returns no JWT_SECRET', async 
   );
 });
 
-test('boot succeeds when Infisical returns a JWT_SECRET', async () => {
+test("boot succeeds when Infisical returns a JWT_SECRET", async () => {
   await withEnv(INFISICAL_ENV, () =>
     withFetch(
       (async () =>
         new Response(
-          JSON.stringify({ secrets: [{ secretKey: 'JWT_SECRET', secretValue: 's3cret' }] }),
+          JSON.stringify({
+            secrets: [{ secretKey: "JWT_SECRET", secretValue: "s3cret" }],
+          }),
           { status: 200 },
         )) as typeof fetch,
       async () => {
         const cfg = await loadConfig();
-        assert.equal(cfg.jwtSecret, 's3cret');
+        assert.equal(cfg.jwtSecret, "s3cret");
       },
     ),
   );
 });
 
-test('lite mode (no INFISICAL_TOKEN) boots without contacting Infisical', async () => {
+test("lite mode (no INFISICAL_TOKEN) boots without contacting Infisical", async () => {
   await withEnv(
     {
-      INFISICAL_URL: 'https://infisical.example.com',
-      INFISICAL_PROJECT_ID: 'proj-1',
-      INFISICAL_ENVIRONMENT: 'dev',
-      INFISICAL_TOKEN: '',
+      INFISICAL_URL: "https://infisical.example.com",
+      INFISICAL_PROJECT_ID: "proj-1",
+      INFISICAL_ENVIRONMENT: "dev",
+      INFISICAL_TOKEN: "",
     },
     () =>
       withFetch(
         (async () => {
-          throw new Error('fetch must not be called in lite mode');
+          throw new Error("fetch must not be called in lite mode");
         }) as typeof fetch,
         async () => {
           const cfg = await loadConfig();
-          assert.equal(cfg.jwtSecret, '');
+          assert.equal(cfg.jwtSecret, "");
         },
       ),
   );
+});
+
+test("cookieSecure defaults to null (auto-detect) when COOKIE_SECURE is unset", async () => {
+  await withEnv(
+    { ...INFISICAL_ENV, INFISICAL_TOKEN: "", COOKIE_SECURE: "" },
+    async () => {
+      const cfg = await loadConfig();
+      assert.equal(cfg.cookieSecure, null);
+    },
+  );
+});
+
+test("cookieSecure parses true/false from COOKIE_SECURE", async () => {
+  for (const [value, expected] of [
+    ["true", true],
+    ["false", false],
+  ] as const) {
+    await withEnv(
+      { ...INFISICAL_ENV, INFISICAL_TOKEN: "", COOKIE_SECURE: value },
+      async () => {
+        const cfg = await loadConfig();
+        assert.equal(cfg.cookieSecure, expected);
+      },
+    );
+  }
 });
