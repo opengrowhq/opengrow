@@ -126,10 +126,10 @@ surface — 19 tools, up from the base `/mcp` server.
 - Prepaid credit balance with a hard stop on exhausted credit (never a
   silent overage charge), billed by real per-model LLM cost — held before
   the call, settled after, refunded on failure.
-- Purchased credit top-ups (fixed €10/€25/€50 tiers) for tenants who need
+- Purchased credit top-ups (fixed tiers) for tenants who need
   more than their plan's included allowance before renewal.
-- Seat-based Team pricing: 5 included seats, additional seats billed
-  automatically as members are invited or removed.
+- Seat-based Team pricing: a base number of included seats, with additional
+  seats billed automatically as members are invited or removed.
 - Past-due/dunning warning on the Billing settings card with a direct link
   into the Stripe Portal to update a failed payment method.
 
