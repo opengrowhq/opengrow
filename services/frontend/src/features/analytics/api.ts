@@ -204,6 +204,7 @@ export async function importAnalyticsEventsCsv(
   return parse(
     await fetch(`${API_BASE}/analytics/import/csv?provider=${provider}`, {
       method: "POST",
+      credentials: "include",
       headers: authHeaders(), // no Content-Type — browser sets multipart boundary
       body: form,
     }),

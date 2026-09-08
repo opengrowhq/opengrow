@@ -1,14 +1,41 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import { resolvePostAuthPath } from "@/lib/app-routes.mjs";
+import { API_BASE, readAuthMode } from "@/lib/http";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { BrandMark, GradientMesh, SparkIcon } from "@/components/illustrations";
 import { EASE } from "@/components/motion";
+import { fetchMe } from "../api";
+import { GOOGLE_LOGIN_URL, isGoogleLoginAvailable, parseOAuthFragment } from "../oauth";
 import { useLogin } from "../hooks";
+
+function GoogleMark() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="#4285F4"
+        d="M23.5 12.27c0-.85-.08-1.66-.22-2.45H12v4.64h6.45a5.52 5.52 0 0 1-2.4 3.62v3h3.88c2.27-2.09 3.57-5.17 3.57-8.81Z"
+      />
+      <path
+        fill="#34A853"
+        d="M12 24c3.24 0 5.96-1.07 7.94-2.92l-3.88-3c-1.08.72-2.45 1.15-4.06 1.15-3.12 0-5.77-2.11-6.71-4.95H1.29v3.1A12 12 0 0 0 12 24Z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M5.29 14.28A7.2 7.2 0 0 1 4.9 12c0-.79.14-1.56.38-2.28v-3.1H1.29a12 12 0 0 0 0 10.76l4-3.1Z"
+      />
+      <path
+        fill="#EA4335"
+        d="M12 4.77c1.76 0 3.34.6 4.58 1.8l3.44-3.44A11.98 11.98 0 0 0 12 0 12 12 0 0 0 1.29 6.62l4 3.1C6.23 6.88 8.88 4.77 12 4.77Z"
+      />
+    </svg>
+  );
+}
 
 export function LoginForm() {
   const router = useRouter();
@@ -17,6 +44,53 @@ export function LoginForm() {
   const login = useLogin();
   const [email, setEmail] = useState("demo@opengrow.dev");
   const [password, setPassword] = useState("");
+  const [oauthError, setOauthError] = useState<string | null>(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("error")
+      ? "Google sign-in failed. Please try again."
+      : null,
+  );
+
+  // OAuth callback handoff: the hosted backend redirects back to
+  // /login#access_token=…&refresh_token=… (fragment, so tokens never hit
+  // server logs). Consume it once: POST the pair to the gateway's one-shot
+  // /auth/session endpoint, which moves them into httpOnly cookies, then land
+  // in the workspace. Tokens never touch JS-accessible storage.
+  useEffect(() => {
+    const pair = parseOAuthFragment(window.location.hash);
+    if (!pair) return;
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    void (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/auth/session`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+          },
+          body: JSON.stringify({
+            access_token: pair.access_token,
+            refresh_token: pair.refresh_token ?? undefined,
+          }),
+        });
+        if (!res.ok) throw new Error(`session handoff failed: ${res.status}`);
+        readAuthMode(res);
+        const me = await fetchMe();
+        router.push(resolvePostAuthPath(next, me.tenant_slug));
+      } catch {
+        setOauthError("Sign-in failed. Please try again.");
+      }
+    })();
+    // Runs once on mount; `next` is captured from the initial URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const google = useQuery({
+    queryKey: ["auth", "google-available"],
+    queryFn: isGoogleLoginAvailable,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -52,6 +126,20 @@ export function LoginForm() {
           </p>
 
           <div className="mt-8 space-y-4">
+            {google.data === true && (
+              <>
+                <a
+                  href={GOOGLE_LOGIN_URL}
+                  className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white text-sm font-bold text-gray-700 transition hover:bg-gray-50"
+                >
+                  <GoogleMark /> Continue with Google
+                </a>
+                <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  <span className="h-px flex-1 bg-gray-200" /> or <span className="h-px flex-1 bg-gray-200" />
+                </div>
+              </>
+            )}
+
             <Field label="Email">
               <Input
                 type="email"
@@ -71,13 +159,14 @@ export function LoginForm() {
               />
             </Field>
 
-            {login.isError && (
+            {(login.isError || oauthError) && (
               <motion.p
                 initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="rounded-xl bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-600"
               >
-                {login.error instanceof Error ? login.error.message : "Login failed"}
+                {oauthError ??
+                  (login.error instanceof Error ? login.error.message : "Login failed")}
               </motion.p>
             )}
 

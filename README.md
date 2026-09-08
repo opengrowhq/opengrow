@@ -68,7 +68,7 @@ The full loop runs locally today — **context → content → publish → attri
 - First-class headless REST API: API keys (`X-API-Key`), `limit/offset` + `X-Total-Count` pagination, `GET /version` — reference in [`docs/API.md`](./services/fastapi-core/docs/API.md)
 - MCP server (`/mcp`, 19 tools) so agents (Claude Code, Cursor) can drive OpenGrow directly — content, generations, the full article pipeline (research → outline → approve → draft), analytics connectors, and recommendations, all reusing the same REST logic
 - Single-call content cycle (`/orchestrator/runs`), per-tenant usage metering (`/usage`), optional rate limiting
-- Lite (personal, 8 services) and Production (multi-tenant, 15 services) from one codebase
+- Lite (personal, 8 services) and Production (multi-tenant, 16 services) from one codebase
 
 ## Why OpenGrow exists
 
@@ -90,7 +90,7 @@ OpenGrow ships in two shapes from the same codebase — pick by use case:
 
 | | **Lite** (personal / single-tenant) | **Production** (multi-tenant) |
 |---|---|---|
-| Services | 8 | 15 |
+| Services | 8 | 16 |
 | Setup time | ~5 min | ~15 min |
 | Min RAM | ~2 GB | ~8 GB |
 | Auth | JWT | JWT + OpenFGA ReBAC |
@@ -98,7 +98,7 @@ OpenGrow ships in two shapes from the same codebase — pick by use case:
 | AV scanning | skipped (personal upload trust) | ClamAV enforced |
 | LLM path | LiteLLM library (in-process) | LiteLLM proxy container |
 | Vector search | Postgres JSONB embeddings + local cosine ranking | Qdrant |
-| BFF | not needed (direct FastAPI) | Node/Fastify |
+| BFF | not needed (direct FastAPI) | Node/Fastify (sets httpOnly session cookies) |
 | Reverse proxy | not needed | Caddy (auto-TLS in prod) |
 | Multi-tenancy | single-tenant | full row-level + ReBAC |
 | Best for | solo dev, personal blog automation, quick eval | agency, team, enterprise |
@@ -279,7 +279,7 @@ For a Debian single-server prod deploy: `make prod-up` after setting `CADDY_DOMA
 ```
 opengrow/
 ├── docker-compose.lite.yml           # Lite (8 services) — personal use
-├── docker-compose.yml                # Base (15 services) — production
+├── docker-compose.yml                # Base (16 services) — production
 ├── docker-compose.prod.yml           # Debian single-server overlay
 ├── Makefile                          # make lite-up / make up-d / make prod-up
 ├── .env.lite.example                 # Env template for lite
@@ -314,6 +314,15 @@ The **same code** in `services/fastapi-core/app/` runs in both modes. The `DEPLO
 | `app/routers/health.py` | `/ready` checks postgres + minio | Also checks Qdrant, OpenFGA, LiteLLM |
 
 Tenant isolation via row-level `tenant_id` filters is enforced in **both** modes at the SQL layer. Lite mode drops only the ReBAC (OpenFGA) enforcement.
+
+### Auth transport: Bearer vs httpOnly cookies
+
+The session JWT moves differently in each mode:
+
+- **Lite** — the browser calls fastapi-core directly and keeps the access/refresh tokens in localStorage, sent as `Authorization: Bearer …`. (Acceptable for a personal single-origin deployment; see `docs/threat-model.md`.)
+- **Production** — the node-gateway BFF intercepts login/refresh/set-password/invite-accept responses, moves the tokens into `og_at`/`og_rt` httpOnly `Secure` `SameSite=Strict` cookies (stripping them from the JSON body), and re-injects the access token from the cookie into the `Authorization` header on the way in. JavaScript never sees the tokens. The gateway also serves `POST /auth/logout` (clears the cookies) and `POST /auth/session` (one-shot handoff for OAuth-callback fragments).
+
+For cookie mode the frontend must call the API **same-origin** — leave `NEXT_PUBLIC_API_BASE` empty (the default) so the browser talks to the gateway through Caddy. The gateway reads `COOKIE_SECURE` (`true`/`false`; unset = auto-detect from the request protocol behind Caddy's TLS).
 
 ## Documentation
 

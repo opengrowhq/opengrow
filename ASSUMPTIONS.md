@@ -202,6 +202,7 @@ All variables required to run OpenGrow, exhaustively:
 - `GOOGLE_OAUTH_REDIRECT_URI`
 - `MAILPIT_HOST`, `MAILPIT_SMTP_PORT`
 - `CADDY_DOMAIN`, `CADDY_EMAIL` (prod only)
+- `COOKIE_SECURE` (gateway only: `'true'|'false'`; unset = auto-detect from the request protocol behind Caddy's TLS)
 
 **Pulled from Infisical at boot** (never committed):
 
@@ -258,3 +259,57 @@ All variables required to run OpenGrow, exhaustively:
     (generate → promote → optional publish), and optional `limit/offset` +
     `X-Total-Count` pagination on list endpoints. Usage *billing* (charging for
     metered usage) is not part of the open-source core.
+
+---
+
+## 9. Auth transport — Bearer+localStorage (lite) vs httpOnly cookies (gateway)
+
+**Accepted.** The session JWT moves two ways, picked by deployment shape:
+
+- **Lite** (no gateway, browser → fastapi-core directly): access + refresh
+  tokens live in localStorage and travel as `Authorization: Bearer …`. Kept
+  unchanged — for a personal single-origin deployment the XSS-exfiltration
+  exposure of localStorage is an accepted trade-off (see `docs/threat-model.md`),
+  and zero cookie machinery keeps the 8-service stack simple.
+- **Production** (browser → Caddy → node-gateway BFF → fastapi-core): the
+  gateway intercepts the token-issuing responses (`POST /auth/login`,
+  `/auth/refresh`, the hosted overlay's `POST /auth/set-password` (its
+  responses flow through the gateway's `/auth` proxy), and
+  `POST /invites/{token}/accept`),
+  moves the tokens into `og_at` (path `/`) and `og_rt` (path `/auth`) cookies —
+  `HttpOnly`, `Secure` (pinned via `COOKIE_SECURE` or auto-detected from the
+  request protocol with `trustProxy: true`), `SameSite=Strict`, `Max-Age` from
+  the JWT `exp` claim — and strips them from the JSON body, marking the
+  response `x-og-auth: cookie` so the frontend knows which transport is live.
+  On the way in, an `onRequest` hook (registered before the edge-auth hook)
+  re-injects `og_at` as the Bearer header, so the edge JWT verify is untouched.
+  `/auth/refresh` additionally gets the `og_rt` value injected into the proxied
+  JSON body (the browser cannot read the httpOnly cookie to send it itself).
+
+**Rationale.** Tokens in browser-readable storage are one XSS payload away
+from full account compromise. httpOnly cookies remove the entire token-
+exfiltration class for production multi-tenant deployments while keeping the
+gateway stateless (no server-side session store — the JWT still carries
+identity, the cookie is only a transport).
+
+**What stays the same.** Edge JWT verification in the gateway; fastapi-core
+unchanged except `allow_credentials=True` on CORS (origins stay the explicit
+`settings.cors_origins` list — never reflect + credentials); the frontend's
+Bearer+localStorage flow untouched in lite mode (the cookie-mode flag only
+flips when the gateway's mode header is seen).
+
+**Local gateway routes.** `POST /auth/logout` (expires both cookies) and
+`POST /auth/session` — a fixation-guarded (`X-Requested-With` required,
+30/min/IP), deliberately token-unvalidated one-shot handoff so OAuth-callback
+fragments (`/login#access_token=…`) can move into httpOnly cookies without
+passing through JS-readable storage. Not validating there is acceptable: the
+edge auth check validates the cookie on the next proxied request, so a forged
+session buys nothing a bad Bearer header wouldn't.
+
+**Rejected alternatives.**
+- *Tokens in sessionStorage* — same exfiltration class as localStorage; only
+  narrows persistence, doesn't remove the threat.
+- *Stripping tokens from response bodies without a mode header* — the
+  frontend could not distinguish a gateway-stripped login from a broken lite
+  login; the explicit `x-og-auth` header keeps both transports detectable and
+  lets lite behavior stay byte-identical.

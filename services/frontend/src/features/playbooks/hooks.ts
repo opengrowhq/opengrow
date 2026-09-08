@@ -1,10 +1,10 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { loadToken } from "@/lib/auth";
+import { hasSession } from "@/lib/auth";
 import { activatePlaybook, createPlaybook, listPlaybooks, type PlaybookKind } from "./api";
 
-const hasToken = () => !!loadToken();
+const hasToken = () => hasSession();
 
 export function usePlaybooks(kind?: PlaybookKind) {
   return useQuery({

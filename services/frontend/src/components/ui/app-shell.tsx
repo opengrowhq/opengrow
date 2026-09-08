@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import { useHasToken, useMe } from "@/features/auth";
 import { appPath, appRootPath } from "@/lib/app-routes.mjs";
-import { clearToken } from "@/lib/auth";
+import { logout } from "@/lib/http";
 import {
   AdIcon,
   ArticleIcon,
@@ -150,7 +150,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const addBrand = () => router.push(appPath(tenantSlug, "onboarding"));
   const signOut = () => {
-    clearToken();
+    // Clears localStorage under both transports and, in cookie mode, the
+    // httpOnly cookies at the BFF.
+    logout();
     router.replace("/login");
   };
 

@@ -1,4 +1,5 @@
-import { apiDelete, apiGet, apiSend } from "@/lib/http";
+import { isCookieMode } from "@/lib/auth";
+import { API_BASE, apiDelete, apiGet, apiSend, parse, readAuthMode } from "@/lib/http";
 
 export type Invite = {
   id: string;
@@ -31,8 +32,23 @@ export type AcceptInviteInput = {
   password: string;
 };
 
-export const acceptInvite = (input: AcceptInviteInput) =>
-  apiSend<{ access_token: string }>(`/invites/${input.token}/accept`, "POST", {
-    display_name: input.display_name,
-    password: input.password,
+/**
+ * Accepts an invite. Through the gateway the returned token pair is stripped
+ * from the body and set as httpOnly cookies instead — then `pair` is null.
+ */
+export async function acceptInvite(
+  input: AcceptInviteInput,
+): Promise<{ pair: { access_token: string; refresh_token?: string } | null }> {
+  const res = await fetch(`${API_BASE}/invites/${input.token}/accept`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ display_name: input.display_name, password: input.password }),
   });
+  readAuthMode(res);
+  if (isCookieMode()) {
+    if (!res.ok) await parse<never>(res); // throws ApiError with the server detail
+    return { pair: null };
+  }
+  return { pair: await parse(res) };
+}
