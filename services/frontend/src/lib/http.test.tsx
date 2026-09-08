@@ -79,7 +79,7 @@ describe("http transport — auth mode", () => {
 
     expect(await http.refreshSession()).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1][0]).toBe("http://localhost:8000/auth/logout");
+    expect(fetchMock.mock.calls[1][0]).toBe("/auth/logout");
     expect((fetchMock.mock.calls[1][1] as RequestInit).credentials).toBe("include");
   });
 

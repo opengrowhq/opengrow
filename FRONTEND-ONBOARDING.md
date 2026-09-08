@@ -29,6 +29,7 @@ Full API conventions live in **`services/fastapi-core/docs/API.md`** — read it
 ```bash
 cd services/frontend
 npm install
+echo 'NEXT_PUBLIC_API_BASE=http://localhost:8000' > .env.local   # lite: reach fastapi-core directly
 npm run dev        # http://localhost:3000
 npm test           # node --test *.mjs (logic tests)
 npm run lint
