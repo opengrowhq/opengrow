@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import { resolvePostAuthPath } from "@/lib/app-routes.mjs";
-import { saveToken, saveTokenPair } from "@/lib/auth";
+import { API_BASE, readAuthMode } from "@/lib/http";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { BrandMark, GradientMesh, SparkIcon } from "@/components/illustrations";
@@ -52,17 +52,35 @@ export function LoginForm() {
 
   // OAuth callback handoff: the hosted backend redirects back to
   // /login#access_token=…&refresh_token=… (fragment, so tokens never hit
-  // server logs). Consume it once, strip the hash, land in the workspace.
+  // server logs). Consume it once: POST the pair to the gateway's one-shot
+  // /auth/session endpoint, which moves them into httpOnly cookies, then land
+  // in the workspace. Tokens never touch JS-accessible storage.
   useEffect(() => {
     const pair = parseOAuthFragment(window.location.hash);
-    if (pair) {
-      if (pair.refresh_token) saveTokenPair(pair.access_token, pair.refresh_token);
-      else saveToken(pair.access_token);
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
-      void fetchMe()
-        .then((me) => router.push(resolvePostAuthPath(next, me.tenant_slug)))
-        .catch(() => setOauthError("Sign-in failed. Please try again."));
-    }
+    if (!pair) return;
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    void (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/auth/session`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+          },
+          body: JSON.stringify({
+            access_token: pair.access_token,
+            refresh_token: pair.refresh_token ?? undefined,
+          }),
+        });
+        if (!res.ok) throw new Error(`session handoff failed: ${res.status}`);
+        readAuthMode(res);
+        const me = await fetchMe();
+        router.push(resolvePostAuthPath(next, me.tenant_slug));
+      } catch {
+        setOauthError("Sign-in failed. Please try again.");
+      }
+    })();
     // Runs once on mount; `next` is captured from the initial URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -54,6 +54,7 @@ describe("LoginForm", () => {
     login.error = null;
     window.localStorage.clear();
     window.history.replaceState(null, "", "/login");
+    vi.unstubAllGlobals();
   });
 
   it("submits credentials and redirects to the workspace on success", async () => {
@@ -106,16 +107,37 @@ describe("LoginForm", () => {
     expect(link).toHaveAttribute("href", GOOGLE_LOGIN_URL);
   });
 
-  it("consumes the OAuth token fragment, stores it, and lands in the workspace", async () => {
+  it("hands the OAuth token fragment to the gateway session endpoint and lands in the workspace", async () => {
     window.history.replaceState(null, "", "/login#access_token=tok&refresh_token=ref");
     fetchMe.mockResolvedValue({ tenant_slug: "acme" });
+    const sessionFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "x-og-auth": "cookie" }),
+    });
+    vi.stubGlobal("fetch", sessionFetch);
     renderForm();
 
     await vi.waitFor(() => expect(push).toHaveBeenCalledWith("/app/acme"));
-    expect(window.localStorage.getItem("opengrow.token")).toBe("tok");
-    expect(window.localStorage.getItem("opengrow.refresh")).toBe("ref");
+    expect(sessionFetch).toHaveBeenCalledWith(
+      expect.stringContaining("/auth/session"),
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({ "X-Requested-With": "XMLHttpRequest" }),
+      }),
+    );
+    const body = JSON.parse(sessionFetch.mock.calls[0][1].body as string);
+    expect(body).toEqual({ access_token: "tok", refresh_token: "ref" });
     expect(window.location.hash).toBe("");
-    expect(push).toHaveBeenCalledWith("/app/acme");
+    expect(window.localStorage.getItem("opengrow.token")).toBeNull();
+    expect(window.localStorage.getItem("opengrow.refresh")).toBeNull();
+  });
+
+  it("shows a friendly error when the session handoff is rejected", async () => {
+    window.history.replaceState(null, "", "/login#access_token=tok&refresh_token=ref");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 403 }));
+    renderForm();
+    expect(await screen.findByText("Sign-in failed. Please try again.")).toBeInTheDocument();
   });
 
   it("shows a friendly error when the OAuth callback failed", () => {
