@@ -48,8 +48,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
+    # Explicit list only (never reflect + credentials). Cookie-mode auth
+    # transports the session via httpOnly cookies set by the node-gateway BFF
+    # (SameSite=Strict), so credentialed cross-origin requests must be
+    # allowed; lite mode stays Bearer-in-header and simply ignores cookies.
     allow_origins=settings.cors_origins,
-    allow_credentials=False,  # auth is a Bearer token, not cookies
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["X-Total-Count"],  # pagination total for browser clients
