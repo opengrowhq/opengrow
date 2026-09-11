@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core.article_grounding import ground_article
 from app.core.article_metadata import article_content_metadata
+from app.core.authz import authz_client
 from app.core.generation_messages import build_generation_messages
 from app.core.keyword_research import research_keywords
 from app.core.litellm_client import chat_completion
@@ -151,6 +152,11 @@ def _new_article_generation(
     )
     db.add(gen)
     db.commit()
+    _run(
+        authz_client.bind_resource_to_tenant(
+            "generation", str(gen.id), str(run.tenant_id), str(run.user_id)
+        )
+    )
     record_usage_sync(
         db,
         tenant_id=run.tenant_id,
@@ -371,6 +377,11 @@ def _step_promote(db: Session, run: OrchestratorRun) -> None:
         )
         db.add(cp)
         db.commit()
+        _run(
+            authz_client.bind_resource_to_tenant(
+                "content_piece", str(cp.id), str(run.tenant_id), str(run.user_id)
+            )
+        )
         run.content_piece_id = cp.id
         db.commit()
 
@@ -493,6 +504,11 @@ def _execute_legacy_run(db: Session, run: OrchestratorRun) -> str:
         )
         db.add(gen)
         db.commit()
+        _run(
+            authz_client.bind_resource_to_tenant(
+                "generation", str(gen.id), str(run.tenant_id), str(run.user_id)
+            )
+        )
         run.generation_id = gen.id
         db.commit()
 
@@ -521,6 +537,11 @@ def _execute_legacy_run(db: Session, run: OrchestratorRun) -> str:
         )
         db.add(cp)
         db.commit()
+        _run(
+            authz_client.bind_resource_to_tenant(
+                "content_piece", str(cp.id), str(run.tenant_id), str(run.user_id)
+            )
+        )
         run.content_piece_id = cp.id
         db.commit()
 

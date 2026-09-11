@@ -298,6 +298,34 @@ def test_execute_run_auto_publishes_when_configured(sync_db, monkeypatch):
     assert pub.external_ref == "tweet 1"
 
 
+def test_execute_run_binds_authz_tuples_for_created_resources(sync_db, monkeypatch):
+    """Regression: orchestrator-created Generation/ContentPiece rows must get
+    OpenFGA tuples, same as the HTTP routers, or production-mode reads 403
+    on every artifact the pipeline produces."""
+    monkeypatch.setattr(
+        orchestrator, "_generate_text", lambda db, gen, brief, model: "body"
+    )
+    calls = []
+
+    async def fake_bind(object_type, object_id, tenant_id, owner_user_id):
+        calls.append((object_type, object_id, tenant_id, owner_user_id))
+
+    monkeypatch.setattr(orchestrator.authz_client, "bind_resource_to_tenant", fake_bind)
+
+    run = _seed_run(sync_db)
+    assert orchestrator.execute_run(sync_db, run.id) == "ok"
+
+    sync_db.refresh(run)
+    bound_types = {c[0] for c in calls}
+    assert bound_types == {"generation", "content_piece"}
+    bound_ids = {c[1] for c in calls}
+    assert str(run.generation_id) in bound_ids
+    assert str(run.content_piece_id) in bound_ids
+    for _object_type, _object_id, tenant_id, owner_user_id in calls:
+        assert tenant_id == str(run.tenant_id)
+        assert owner_user_id == str(run.user_id)
+
+
 def test_execute_run_marks_failed_on_llm_error(sync_db, monkeypatch):
     def boom(db, gen, brief, model):
         raise RuntimeError("llm down")

@@ -7,12 +7,14 @@
 {$CADDY_DOMAIN} {
 	encode gzip zstd
 
-	# API traffic to node-gateway (BFF). The gateway proxies bare namespaces
-	# 1:1 to fastapi-core (/auth, /assets, /content, …), so the /api prefix is
-	# stripped here; /auth/* already matches the gateway's bare paths.
-	@api path /auth/* /api/*
+	# API traffic to node-gateway (BFF). The frontend calls bare namespaces
+	# (same-origin, no /api prefix — see services/frontend/src/lib/http.ts),
+	# and the gateway proxies those bare paths 1:1 to fastapi-core, so Caddy
+	# must match them directly here rather than stripping an /api prefix that
+	# the frontend never sends. Keep in sync with node-gateway's
+	# PROXIED_PREFIXES (services/node-gateway/src/public-paths.ts).
+	@api path /auth/* /assets/* /generations/* /content/* /brands/* /analytics/* /invites/* /playbooks/* /orchestrator/* /billing/*
 	handle @api {
-		uri strip_prefix /api
 		reverse_proxy node-gateway:3001
 	}
 
