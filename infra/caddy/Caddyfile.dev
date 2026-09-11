@@ -1,6 +1,8 @@
 # Dev — HTTP only. Frontend hits node-gateway directly via 127.0.0.1:3001.
 :80 {
-	@gw path /auth/* /api/*
+	# Keep in sync with node-gateway's PROXIED_PREFIXES
+	# (services/node-gateway/src/public-paths.ts).
+	@gw path /auth/* /assets/* /generations/* /content/* /brands/* /analytics/* /invites/* /playbooks/* /orchestrator/* /billing/*
 	reverse_proxy @gw node-gateway:3001
 
 	@core path /docs /openapi.json
