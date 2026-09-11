@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_current_user
+from app.core.authz import authz_client
 from app.core.usage import record_usage
 from app.database import get_db
 from app.models.generation import Generation
@@ -47,6 +48,20 @@ def _out(run: OrchestratorRun, result: str | None = None) -> OrchestratorRunOut:
     )
 
 
+async def _assert_tenant_reader(current: User) -> None:
+    if not await authz_client.check(
+        str(current.id), "reader", f"tenant:{current.tenant_id}"
+    ):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not permitted for this tenant")
+
+
+async def _assert_tenant_writer(current: User) -> None:
+    if not await authz_client.check(
+        str(current.id), "writer", f"tenant:{current.tenant_id}"
+    ):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not permitted for this tenant")
+
+
 async def _get_tenant_run(
     db: AsyncSession, run_id: UUID, tenant_id: UUID
 ) -> OrchestratorRun:
@@ -71,6 +86,8 @@ async def create_run(
     current: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    await _assert_tenant_writer(current)
+
     details = None
     brief = payload.brief
     if payload.article is not None:
@@ -113,6 +130,8 @@ async def list_runs(
     current: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    await _assert_tenant_reader(current)
+
     rows = await db.execute(
         select(OrchestratorRun)
         .where(
@@ -131,6 +150,8 @@ async def get_run(
     current: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    await _assert_tenant_reader(current)
+
     run = await _get_tenant_run(db, run_id, current.tenant_id)
 
     result = None
@@ -147,6 +168,8 @@ async def approve_outline(
     current: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    await _assert_tenant_writer(current)
+
     run = await _get_tenant_run(db, run_id, current.tenant_id)
     if run.status != OrchestratorRunStatus.AWAITING_OUTLINE_APPROVAL:
         raise HTTPException(
@@ -172,6 +195,8 @@ async def resume_run(
     current: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    await _assert_tenant_writer(current)
+
     run = await _get_tenant_run(db, run_id, current.tenant_id)
     if run.status != OrchestratorRunStatus.FAILED:
         raise HTTPException(
