@@ -62,6 +62,82 @@ async def test_run_requires_auth(client):
     ).status_code == 401
 
 
+def _deny_authz(monkeypatch):
+    """Force every authz_client.check() to deny, regardless of the lite-mode
+    stub (which always allows) — proves the router's checks are load-bearing,
+    not just present as unreachable code."""
+    from app.core import authz
+
+    async def _deny(user_id: str, relation: str, object_id: str) -> bool:
+        return False
+
+    monkeypatch.setattr(authz.authz_client, "check", _deny)
+
+
+async def test_create_run_requires_tenant_writer(client, tenant_factory, monkeypatch):
+    acct = await tenant_factory()
+    _deny_authz(monkeypatch)
+    resp = await client.post(
+        "/orchestrator/runs", json={"brief": "x"}, headers=acct["headers"]
+    )
+    assert resp.status_code == 403
+
+
+async def test_list_runs_requires_tenant_reader(client, tenant_factory, monkeypatch):
+    acct = await tenant_factory()
+    _deny_authz(monkeypatch)
+    resp = await client.get("/orchestrator/runs", headers=acct["headers"])
+    assert resp.status_code == 403
+
+
+async def test_get_run_requires_tenant_reader(
+    client, tenant_factory, no_celery, monkeypatch
+):
+    acct = await tenant_factory()
+    h = acct["headers"]
+    run_id = (
+        await client.post("/orchestrator/runs", json={"brief": "x"}, headers=h)
+    ).json()["run_id"]
+
+    _deny_authz(monkeypatch)
+    resp = await client.get(f"/orchestrator/runs/{run_id}", headers=h)
+    assert resp.status_code == 403
+
+
+async def test_approve_outline_requires_tenant_writer(
+    client, db, tenant_factory, no_celery, monkeypatch
+):
+    acct = await tenant_factory()
+    h = acct["headers"]
+    run_id = (
+        await client.post("/orchestrator/runs", json={"brief": "x"}, headers=h)
+    ).json()["run_id"]
+    await _force_run_state(db, run_id, OrchestratorRunStatus.AWAITING_OUTLINE_APPROVAL)
+
+    _deny_authz(monkeypatch)
+    resp = await client.post(
+        f"/orchestrator/runs/{run_id}/outline/approve",
+        json={"outline": [{"heading": "A", "points": []}]},
+        headers=h,
+    )
+    assert resp.status_code == 403
+
+
+async def test_resume_run_requires_tenant_writer(
+    client, db, tenant_factory, no_celery, monkeypatch
+):
+    acct = await tenant_factory()
+    h = acct["headers"]
+    run_id = (
+        await client.post("/orchestrator/runs", json={"brief": "x"}, headers=h)
+    ).json()["run_id"]
+    await _force_run_state(db, run_id, OrchestratorRunStatus.FAILED)
+
+    _deny_authz(monkeypatch)
+    resp = await client.post(f"/orchestrator/runs/{run_id}/resume", headers=h)
+    assert resp.status_code == 403
+
+
 async def test_create_article_run_persists_pipeline_details(
     client, db, tenant_factory, no_celery
 ):
